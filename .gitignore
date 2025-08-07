@@ -1,2 +1,14 @@
 .venv
 cache
+
+notebooks
+
+
+**/__pycache__/
+*.py[cod]
+__pycache__/
+
+
+data
+.vscode
+models
