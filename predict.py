@@ -1,8 +1,8 @@
 # %%
 import osmnx as ox
-from src.models.CityLearningModel import CityLearningModel
-from src.features.FeatureExtract import extract_features_from_edges
-from src.utils.utils import simplify_osmnx_graph_to_gdf
+from modules.city_learning.src.models.CityLearningModel import CityLearningModel
+from modules.city_learning.src.features.FeatureExtract import extract_features_from_edges
+from modules.city_learning.src.utils.utils import simplify_osmnx_graph_to_gdf
 from shapely.geometry import box
 
 ox.settings.log_console = False
