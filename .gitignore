@@ -1,14 +1,25 @@
-.venv
-cache
+# Environments and IDEs
+.venv/
+.vscode/
+.env
 
-notebooks
+# Python junk
+**/__pycache__/
+*.py[cod]
+*$py.class
 
+# Research Data & Models (Folders)
+data/
+cache/
+saved_models/
+logs/
 
-# **/__pycache__/
-# *.py[cod]
-# __pycache__/
+# OS Junk
+.DS_Store
+Thumbs.db
 
-
-data
-.vscode
-saved_models
+# Large Binaries
+*.pth
+*.h5
+*.ckpt
+*.edf

@@ -1,120 +1,153 @@
-# %%
-import osmnx as ox
-import os
-from modules.city_learning.src.models.CityLearningModel import CityLearningModel
-from modules.city_learning.src.features.FeatureExtract import (
-    extract_features_from_edges,
-)
-from modules.city_learning.src.utils.utils import simplify_osmnx_graph_to_gdf
+"""
+Run the trained MultiAttrGAT on a bounding box and return a GeoDataFrame of
+inferred road attributes. Called by backend/city_learning_view.py.
+"""
+from pathlib import Path
 
-# from src.models.CityLearningModel import CityLearningModel
-# from src.features.FeatureExtract import (
-#     extract_features_from_edges,
-# )
-# from src.utils.utils import simplify_osmnx_graph_to_gdf
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import torch
 
-from shapely.geometry import box
-
-ox.settings.log_console = False
-ox.settings.use_cache = True
+from .src.utils.utils import ZScaler
+from .src.data.graph_loader import load_graph_from_db
+from .src.data.road_attributes import build_final_gdf
+from .src.training.dataset import prepare_cross_city_data
+from .src.models.multi_attr_gat import MultiAttrGAT
 
 
-def infer_metadata(min_lon, min_lat, max_lon, max_lat):
-    # place = "Manhattan, New York City, USA"
-    # print(f"Downloading road network for {place}...")
-    # G = ox.graph_from_place(place, network_type='drive')
-    # Create a polygon from the bounding box
+CITY_LEARNING_DIR = Path(__file__).resolve().parent
+REPO_ROOT = CITY_LEARNING_DIR.parent.parent
+CKPT_PATH = CITY_LEARNING_DIR / "checkpoints" / "jakarta_gat_multitask.pt"
 
-    # Download road network within the bounding box polygon
-    print("Downloading road network from bounding box polygon...")
-    G = ox.graph_from_polygon(
-        box(min_lon, min_lat, max_lon, max_lat), network_type="drive"
+DB_HOST = "localhost"
+DB_NAME = "gis"
+DB_USER = "gis"
+DB_PASS = "gis"
+DB_PORT = 5432
+
+
+_STATE: dict = {}
+
+
+def _normalise_scalers(raw: dict) -> dict:
+    out: dict[str, ZScaler] = {}
+
+    if raw and all(isinstance(v, dict) for v in raw.values()):
+        for name, d in raw.items():
+            s = ZScaler(); s.mu = float(d["mu"]); s.sd = float(d["sd"])
+            out[name] = s
+        return out
+
+    if raw and all(hasattr(v, "mu") and hasattr(v, "sd") for v in raw.values()):
+        return dict(raw)
+
+    short2long = {"len": "length", "wid": "width", "max": "max", "min": "min"}
+    buckets: dict[str, dict] = {}
+    for k, v in raw.items():
+        for short, long in short2long.items():
+            if k == f"{short}_mu":
+                buckets.setdefault(long, {})["mu"] = float(v)
+            elif k == f"{short}_sd":
+                buckets.setdefault(long, {})["sd"] = float(v)
+    for long, d in buckets.items():
+        if "mu" in d and "sd" in d:
+            s = ZScaler(); s.mu = d["mu"]; s.sd = d["sd"]
+            out[long] = s
+    return out
+
+
+def _load_model():
+    if "model" in _STATE:
+        return _STATE
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    ckpt = torch.load(CKPT_PATH, map_location=device, weights_only=False)
+
+    model_cfg = dict(ckpt["model_cfg"])
+    # Saved as 6 by mistake; actual trained weights use 12 cont channels.
+    model_cfg["cont_dim"] = 12
+
+    scalers = _normalise_scalers(ckpt["scalers"])
+    for name in ("length", "width", "max", "min"):
+        if name not in scalers:
+            s = ZScaler(); s.mu = 0.0; s.sd = 1.0
+            scalers[name] = s
+
+    model = MultiAttrGAT(
+        num_highway=model_cfg["num_highway"],
+        hwy_emb_dim=model_cfg["hwy_emb_dim"],
+        lanes_emb_dim=model_cfg["lanes_emb_dim"],
+        oneway_emb_dim=model_cfg["oneway_emb_dim"],
+        cont_dim=model_cfg["cont_dim"],
+        hidden=model_cfg["hidden"],
+        heads=model_cfg["heads"],
+        dropout=model_cfg["dropout"],
+    ).to(device)
+    model.load_state_dict(ckpt["model_state"], strict=False)
+    model.eval()
+
+    _STATE.update(
+        model=model,
+        device=device,
+        hwy2id=ckpt["hwy2id"],
+        id2hwy=ckpt["id2hwy"],
+        scalers=scalers,
+        num_highway=model_cfg["num_highway"],
+    )
+    return _STATE
+
+
+def infer_metadata(min_lon, min_lat, max_lon, max_lat) -> gpd.GeoDataFrame:
+    """
+    Run the pretrained MultiAttrGAT on the given bbox. Returns a GeoDataFrame
+    with geometry + predicted highway, lanes, oneway, width, max_speed, min_speed.
+    """
+    min_lon = float(min_lon); min_lat = float(min_lat)
+    max_lon = float(max_lon); max_lat = float(max_lat)
+
+    st = _load_model()
+    model, device = st["model"], st["device"]
+    hwy2id, id2hwy, scalers = st["hwy2id"], st["id2hwy"], st["scalers"]
+
+    G = load_graph_from_db(
+        min_lat=min_lat, max_lat=max_lat,
+        min_lon=min_lon, max_lon=max_lon,
+        repo_root=REPO_ROOT,
     )
 
-    print("Simplifying Graph into Geodataframe")
-    edges, G_undirected = simplify_osmnx_graph_to_gdf(G)
-    import pandas as pd
-
-    def parse_highway(val):
-        if isinstance(val, list):
-            try:
-                return val[0]
-            except:
-                return None
-        return val
-
-    edges["highway_c"] = edges["highway"].apply(parse_highway)
-
-    # Define all possible highway categories (even if some aren't present in the current dataset)
-    ALL_HIGHWAY_CATEGORIES = [
-        "primary",
-        "primary_link",
-        "secondary",
-        "secondary_link",
-        "tertiary",
-        "tertiary_link",
-        "trunk",
-        "trunk_link",
-        "residential",
-        "unclassified",
-        "motorway",
-        "service",
-        "living_street",
-        "track",
-        "footway",
-    ]
-
-    # Convert to categorical with fixed categories
-    edges["highway_c"] = pd.Categorical(
-        edges["highway_c"], categories=ALL_HIGHWAY_CATEGORIES
+    final_gdf = build_final_gdf(
+        G,
+        db_host=DB_HOST, db_name=DB_NAME,
+        db_user=DB_USER, db_pass=DB_PASS, db_port=DB_PORT,
     )
-    print(edges['highway_c'])
 
+    data = prepare_cross_city_data(
+        final_gdf, hwy2id=hwy2id, scalers=scalers, device=device,
+    )
 
-    # Now get_dummies will generate all expected columns
-    highway_vals_df = pd.get_dummies(edges["highway_c"])
+    with torch.no_grad():
+        pred = model(
+            data.x_cont, data.highway_in, data.lanes_in, data.oneway_in,
+            data.edge_index,
+        )
 
-    edges = pd.concat([edges, highway_vals_df], axis=1)
+    hwy_ids = pred["highway"].argmax(dim=1).cpu().numpy()
+    lanes_cls = pred["lanes"].argmax(dim=1).cpu().numpy()
+    oneway = (torch.sigmoid(pred["oneway"]).cpu().numpy() >= 0.5).astype(np.int64)
+    width = pred["width"].cpu().numpy()
+    max_speed = pred["max_speed"].cpu().numpy()
+    min_speed = pred["min_speed"].cpu().numpy()
 
-    print(edges.columns)
-    print(edges.head())
+    out = final_gdf.reset_index(drop=True).copy()
+    # prepare_cross_city_data drops rows with null geometry; align by doing the same.
+    out = out[~out["geometry"].isna()].reset_index(drop=True)
 
-    # edges.drop(columns=['osmid', 'highway', 'maxspeed', 'name', 'reversed', 'ref', 'access', 'width', 'bridge', 'lanes'], inplace=True)
+    out["highway"] = pd.Series(hwy_ids).map(id2hwy).astype(str).values
+    out["lanes"] = lanes_cls.astype(np.int64)
+    out["oneway"] = oneway
+    out["width"] = width.astype(np.float32)
+    out["max_speed"] = max_speed.astype(np.float32)
+    out["min_speed"] = min_speed.astype(np.float32)
 
-    # print(edges.columns)
-
-    """
-    edges.to_parquet("raw/edges.parquet")
-    ox.save_graphml(G_undirected, filepath="raw/G_undirected.graphml")
-
-    print("Loading edges GeoDataFrame...")
-    edges = gpd.read_parquet("../data/raw/edges.parquet")
-
-    print("Loading undirected graph...")
-    G_undirected = ox.load_graphml("../data/raw/G_undirected.graphml")
-
-    print("Data loaded successfully!")
-    """
-
-    print("Extracting Features")
-    X, y = extract_features_from_edges(edges, G_undirected)
-    print(edges.head())
-
-    model = CityLearningModel()
-
-    print(os.getcwd())
-
-    model.load_model("modules/city_learning/saved_models/city_learning.pkl")
-
-    osmid_series = X.join(edges["single_osmid"])["single_osmid"]
-    y_pred = model.predict(X, osmid_series)
-
-    mae, r2, mse, rmse = model.evaluate(y_pred, y)
-
-    print(mae, ", ", r2, ", ", mse, ", ", rmse)
-
-    y_pred.name = "inf_nlanes"
-    result = edges.merge(y_pred, how="right", left_index=True, right_index=True)
-    return result[["inf_nlanes", "geometry"]].reset_index(drop=True)
-
-# %%
+    return gpd.GeoDataFrame(out, geometry="geometry", crs=final_gdf.crs)

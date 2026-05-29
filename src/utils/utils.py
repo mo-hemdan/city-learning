@@ -1,6 +1,8 @@
 import osmnx as ox
 import networkx as nx
 import pandas as pd
+import numpy as np
+
 
 def get_osmnx_graph(min_lat, min_long, max_lat, max_long):
     # Define the bounding box
@@ -22,7 +24,6 @@ def simplify_osmnx_graph_to_gdf(G): # TODO: Needs some adjust as it assumes many
 
     print(edges.columns.tolist())
     print(edges['lanes'].value_counts())
- 
 
     def parse_lanes(val): # TODO: Assumption, we just take the first one
         if isinstance(val, list):
@@ -47,6 +48,33 @@ def simplify_osmnx_graph_to_gdf(G): # TODO: Needs some adjust as it assumes many
     return edges, G_undirected
 
 
+# ---------------------------------------------------------------------------
+# Shared helpers used by the GNN pipeline
+# ---------------------------------------------------------------------------
+
+def lanes_to_class(x) -> int:
+    """Map a numeric lane count to a 3-class label (-1 = missing)."""
+    if pd.isna(x):
+        return -1
+    v = float(x)
+    if v <= 1.0:
+        return 0
+    elif v <= 2.0:
+        return 1
+    else:
+        return 2
 
 
+class ZScaler:
+    """Z-score normaliser that ignores NaN values when fitting."""
 
+    def __init__(self):
+        self.mu = None
+        self.sd = None
+
+    def fit(self, x: np.ndarray):
+        self.mu = float(np.nanmean(x))
+        self.sd = float(np.nanstd(x)) + 1e-8
+
+    def transform(self, x: np.ndarray) -> np.ndarray:
+        return (x - self.mu) / self.sd
