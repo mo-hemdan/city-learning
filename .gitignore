@@ -23,3 +23,6 @@ Thumbs.db
 *.h5
 *.ckpt
 *.edf
+
+# Large data files
+

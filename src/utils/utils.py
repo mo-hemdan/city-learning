@@ -25,6 +25,7 @@ def simplify_osmnx_graph_to_gdf(G): # TODO: Needs some adjust as it assumes many
     print(edges.columns.tolist())
     print(edges['lanes'].value_counts())
 
+
     def parse_lanes(val): # TODO: Assumption, we just take the first one
         if isinstance(val, list):
             try:
