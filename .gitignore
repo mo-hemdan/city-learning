@@ -25,4 +25,6 @@ Thumbs.db
 *.edf
 
 # Large data files
-
+checkpoints/*
+plots/*
+results/*

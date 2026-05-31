@@ -1,15 +1,15 @@
 import sys
 import numpy as np
 import json
-
-sys.path.append(r"D:\mapedia")
+import os
+sys.path.append(os.path.expanduser("~/websites/mapedia"))
 from modules import DBHandler
 
 N_SEASONS, N_DAYS_OF_WEEK, N_HOURS = 4, 7, 24
 SAVE_FOLDER = './data/raw_data/'
 EDGES_KEEP_COLUMNS = ["source","target","pgr_id","osm_id","oneway","road_type","nlanes","width","length","geometry","max_speed","min_speed"]
 
-with open('./data/cities.json', 'r') as f:
+with open('./cities.json', 'r') as f:
     city_bounds = json.load(f)
     
 db_handler = DBHandler()
