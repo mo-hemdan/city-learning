@@ -6,7 +6,7 @@ CHECKPOINT_DIR="./checkpoints"
 OUTPUT_DIR="./data/imputed_data"
 RESULTS_DIR="./results"
 LOG_DIR="./logs/infer"
-DEVICE="cuda"
+DEVICE="cpu"
 
 mkdir -p "$OUTPUT_DIR" "$RESULTS_DIR" "$LOG_DIR"
 

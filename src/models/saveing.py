@@ -100,7 +100,7 @@ def load_checkpoint(model_class, device='cpu', ckpt_path=None):
     if ckpt_path is None:
         ckpt_path = os.path.join(SAVE_DIR, "nyc_gat_multitask.pt")
 
-    checkpoint = torch.load(ckpt_path, map_location=device)
+    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=True)
 
     # ── Rebuild model from saved config ──────────────────────────────────────
     cfg = checkpoint["model_cfg"]
