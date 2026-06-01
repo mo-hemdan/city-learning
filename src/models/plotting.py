@@ -34,8 +34,9 @@ def plot_results(history, path_prefix):
         "wid": "Width Huber",
         "max": "Max Speed Huber",
         "min": "Min Speed Huber",
+        "avg": "Avg Speed Huber"
     }
-    for t in ["hwy", "lan", "onw", "wid", "max", "min"]:
+    for t in task_titles.keys():
         plt.figure()
         plt.plot(history["epoch"], history["train_losses"][t], label="Train")
         plt.plot(history["epoch"], history["val_losses"][t], label="Val")
@@ -52,8 +53,9 @@ def plot_results(history, path_prefix):
         "wid_mae_m": "Width MAE (m, masked)",
         "max_mae": "Max Speed MAE (masked)",
         "min_mae": "Min Speed MAE (masked)",
+        "avg_mae": "Avg Speed MAE (masked)",
     }
-    for m in ["hwy_macro_f1", "lan_macro_f1", "onw_auroc", "wid_mae_m", "max_mae", "min_mae"]:
+    for m in metric_titles.keys():
         plt.figure()
         plt.plot(history["metric_epoch"], history["train_metrics"][m], label="Train")
         plt.plot(history["metric_epoch"], history["val_metrics"][m], label="Val")
