@@ -42,9 +42,6 @@ class MultiAttrGAT(nn.Module):
         onw = self.oneway_emb(oneway_in)
 
         x = torch.cat([x_cont, hwy, lan, onw], dim=1)
-        
-        print(f"x shape         : {x.shape}")               # should be [N, 76]
-        print(f"gat1 in_channels: {self.gat1.in_channels}")  # should also be 76
 
         h = F.elu(self.gat1(x, edge_index))
         h = F.elu(self.gat2(h, edge_index))
