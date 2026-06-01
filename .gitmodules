@@ -1,0 +1,3 @@
+[submodule "embedding_models/graph2vec"]
+    path = embedding_models/graph2vec
+    url = https://github.com/benedekrozemberczki/graph2vec.git

@@ -369,22 +369,22 @@ def infer(edges_path: str,
     avg_total_cells   = avg_speed_flat.size
     print(f"  avg_speed        filled {avg_missing_total:>6} / {avg_total_cells} cells "
           f"({100*avg_missing_total/avg_total_cells:.1f}%)")
-    # ── Quick summary ─────────────────────────────────────────────────────────
-    print("\n=== Imputation summary ===")
-    print(f"  {'column':<14}  {'missing':>8}  {'before':>8}  {'after':>8}")
-    print(f"  {'-'*14}  {'-'*8}  {'-'*8}  {'-'*8}")
-    for col, mask in [
-        ("road_type",  missing_hwy),
-        ("nlanes_cls", missing_lan),
-        ("oneway",     missing_onw),
-        ("width",      missing_wid),
-        ("max_speed",  missing_max),
-        ("min_speed",  missing_min),
-    ]:
-        n_filled     = int(mask.sum())
-        avail_before = 100 * (N - n_filled) / N
-        avail_after  = 100.0
-        print(f"  {col:<14}  {n_filled:>7}  {avail_before:>7.1f}%  {avail_after:>7.1f}%")
+    # # ── Quick summary ─────────────────────────────────────────────────────────
+    # print("\n=== Imputation summary ===")
+    # print(f"  {'column':<14}  {'missing':>8}  {'before':>8}  {'after':>8}")
+    # print(f"  {'-'*14}  {'-'*8}  {'-'*8}  {'-'*8}")
+    # for col, mask in [
+    #     ("road_type",  missing_hwy),
+    #     ("nlanes_cls", missing_lan),
+    #     ("oneway",     missing_onw),
+    #     ("width",      missing_wid),
+    #     ("max_speed",  missing_max),
+    #     ("min_speed",  missing_min),
+    # ]:
+    #     n_filled     = int(mask.sum())
+    #     avail_before = 100 * (N - n_filled) / N
+    #     avail_after  = 100.0
+    #     print(f"  {col:<14}  {n_filled:>7}  {avail_before:>7.1f}%  {avail_after:>7.1f}%")
 
     avg_missing_total = int(np.isnan(avg_speed_flat).sum())
     avg_total_cells   = avg_speed_flat.size

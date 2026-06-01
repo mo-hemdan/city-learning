@@ -33,7 +33,7 @@ def parse_args():
     parser.add_argument("--city",        type=str,   required=True,          help="City name (must match parquet/npy filenames)")
     parser.add_argument("--device",      type=str,   default=None,           help="Device to use: 'cpu', 'cuda', 'cuda:0', etc. Defaults to cuda if available.")
     parser.add_argument("--data_dir",    type=str,   default="./data/raw_data/", help="Directory containing parquet and npy files")
-    parser.add_argument("--plots_dir",   type=str,   default="./plots/",     help="Directory to save plots")
+    parser.add_argument("--plots_dir",   type=str,   default="./plots/single-city/",     help="Directory to save plots")
 
     parser.add_argument("--epochs",      type=int,   default=500,            help="Number of training epochs")
     parser.add_argument("--p_mask",      type=float, default=0.30,           help="Masking probability")
