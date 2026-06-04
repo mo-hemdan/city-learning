@@ -293,7 +293,7 @@ def infer(edges_path: str,
  
     # avg_speed  → (N, 12) z-scores → raw km/h  (no avg_scaler saved; leave as z-scores)
     avg_pred_z    = pred["avg_speed"].cpu().numpy()                        # (N, 12)
-    avg_pred_raw  = avg_pred_z  # inverse transform not available without avg_scaler
+    avg_pred  = avg_scaler.inverse_transform(avg_pred_z)
  
 
     # ── Build output: fill NaN slots, keep observed values unchanged ──────────
@@ -341,10 +341,11 @@ def infer(edges_path: str,
         for period in period_labels:
             col_name = f"avg_speed_{dt}_{period}"
             obs      = avg_speed_obs[:, col_idx]
-            pred_col = avg_pred_raw[:, col_idx]
+            pred_col = avg_pred[:, col_idx]
             missing  = np.isnan(obs)
             imputed  = np.where(missing, pred_col, obs)
-            out[col_name]             = obs
+            out[col_name]              = obs
+            out[f"pred_{col_name}"]    = pred_col      # ← add this
             out[f"imputed_{col_name}"] = imputed
             col_idx += 1
 
@@ -369,27 +370,7 @@ def infer(edges_path: str,
     avg_total_cells   = avg_speed_flat.size
     print(f"  avg_speed        filled {avg_missing_total:>6} / {avg_total_cells} cells "
           f"({100*avg_missing_total/avg_total_cells:.1f}%)")
-    # # ── Quick summary ─────────────────────────────────────────────────────────
-    # print("\n=== Imputation summary ===")
-    # print(f"  {'column':<14}  {'missing':>8}  {'before':>8}  {'after':>8}")
-    # print(f"  {'-'*14}  {'-'*8}  {'-'*8}  {'-'*8}")
-    # for col, mask in [
-    #     ("road_type",  missing_hwy),
-    #     ("nlanes_cls", missing_lan),
-    #     ("oneway",     missing_onw),
-    #     ("width",      missing_wid),
-    #     ("max_speed",  missing_max),
-    #     ("min_speed",  missing_min),
-    # ]:
-    #     n_filled     = int(mask.sum())
-    #     avail_before = 100 * (N - n_filled) / N
-    #     avail_after  = 100.0
-    #     print(f"  {col:<14}  {n_filled:>7}  {avail_before:>7.1f}%  {avail_after:>7.1f}%")
 
-    avg_missing_total = int(np.isnan(avg_speed_flat).sum())
-    avg_total_cells   = avg_speed_flat.size
-    avail_before_avg  = 100 * (avg_total_cells - avg_missing_total) / avg_total_cells
-    print(f"  {'avg_speed':<14}  {avg_missing_total:>7}  {avail_before_avg:>7.1f}%  {'100.0':>7}%")
     return out
 
 

@@ -7,7 +7,7 @@ from modules import DBHandler
 
 N_SEASONS, N_DAYS_OF_WEEK, N_HOURS = 4, 7, 24
 SAVE_FOLDER = './data/raw_data/'
-EDGES_KEEP_COLUMNS = ["source","target","pgr_id","osm_id","oneway","road_type","nlanes","width","length","geometry","max_speed","min_speed"]
+EDGES_KEEP_COLUMNS = ["source","target","mapd_id", "pgr_id","osm_id","oneway","road_type","nlanes","width","length","geometry","max_speed","min_speed"]
 
 with open('./cities.json', 'r') as f:
     city_bounds = json.load(f)
@@ -24,6 +24,7 @@ for city in city_bounds:
         min_lon= city_bounds[city]['min_lon'],
         max_lon= city_bounds[city]['max_lon']
     )
+    print('Edges Columns: ', edges.columns)
     print('Converting avg_speed column into Matrix')
     # Convert to matrix: shape (425377, 671)
     speed_matrix = np.array(
