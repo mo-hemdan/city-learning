@@ -31,7 +31,7 @@ DATA_DIR        = Path("./data/raw_data")
 CITIES_JSON     = Path("./cities.json")
 INPUT_DIR       = Path("./embedding_models/data/graph2vec/input")
 OUTPUT_DIR      = Path("./embedding_models/data/graph2vec/output")
-EMBEDDINGS_CSV  = OUTPUT_DIR / "embeddings.csv"
+EMBEDDINGS_CSV  = OUTPUT_DIR / "embeddings_named.csv"
 PLOT_DIR        = OUTPUT_DIR #Path("./graph_embeddings")
 
 DB_CONFIG = dict(
@@ -43,6 +43,8 @@ DB_CONFIG = dict(
 )
 
 TABLE_NAME = "city_trained_models"
+
+TABLE_NAME = "cities"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -76,60 +78,24 @@ def filter_cities_json(cities: list[str], src: Path, dst: Path) -> None:
         json.dump(filtered, f, indent=2)
     print(f"[INFO] Filtered cities.json → {dst}  ({len(filtered)} cities)")
 
-
-def ensure_table(conn, dimensions: int) -> None:
-    """Add embedding column to city_trained_models if not present."""
-    with conn.cursor() as cur:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-        cur.execute(f"""
-            ALTER TABLE public.city_trained_models
-                ADD COLUMN IF NOT EXISTS embedding     vector({dimensions}),
-                ADD COLUMN IF NOT EXISTS embedding_dim integer;
-                
-        """) # 
-    conn.commit()
-    print(f"[DB] Embedding columns ready on '{TABLE_NAME}' (dim={dimensions})")
-
-def get_city_ids(conn, city_names: list[str]) -> dict[str, int]:
-    """Returns {city_name: city_id} from the cities table."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, name FROM public.cities WHERE name = ANY(%s)",
-            (city_names,)
-        )
-        rows = cur.fetchall()
-
-    found = {name: cid for cid, name in rows}
-    missing = set(city_names) - set(found)
-    if missing:
-        print(f"[WARN] Cities not found in DB: {missing}")
-    return found
-
-
-def upsert_embeddings(conn, df: pd.DataFrame, city_ids: dict[str, int], dimensions: int) -> None:
+def upsert_embeddings(conn, df: pd.DataFrame) -> None: 
     dim_cols = [c for c in df.columns if c not in ("city", "graph_id")]
 
     rows = []
     for _, row in df.iterrows():
         city_name = row["city"]
-        city_id   = city_ids.get(city_name)
-        if city_id is None:
-            print(f"[SKIP] '{city_name}' not found in cities table")
-            continue
         vec = row[dim_cols].to_numpy(dtype=np.float32).tolist()
-        rows.append((vec, dimensions, city_id))
+        rows.append((city_name, vec))
 
     with conn.cursor() as cur:
         execute_values(cur, f"""
             UPDATE public.{TABLE_NAME}
-            SET    embedding     = data.embedding::vector,
-                   embedding_dim = data.dim,
-                   trained_at    = now()
-            FROM (VALUES %s) AS data(embedding, dim, city_id)
-            WHERE  {TABLE_NAME}.city_id = data.city_id;
+            SET    embedding = data.embedding::vector
+            FROM (VALUES %s) AS data(name, embedding)
+            WHERE  {TABLE_NAME}.name = data.name;
         """,
-        rows,
-        template="(%s::vector, %s, %s)"
+        rows,  # list of (name, embedding) tuples
+        template="(%s, %s::vector)"
         )
     conn.commit()
     print(f"[DB] Updated embeddings for {len(rows)} cities in '{TABLE_NAME}'")
@@ -161,7 +127,7 @@ def main():
     if not args.skip_embed:
         # ── Step 1: Prepare ───────────────────────────────────────────────────
         run([
-            sys.executable, "prepare_graph2vec_input.py",
+            sys.executable, "embedding_models/graph2vec_support.py",
             "--mode",         "prepare",
             "--feature_mode", args.feature_mode,
             "--data_dir",     str(DATA_DIR),
@@ -171,7 +137,7 @@ def main():
 
         # ── Step 2: Embed ─────────────────────────────────────────────────────
         run([
-            sys.executable, "graph2vec/src/graph2vec.py",
+            sys.executable, "embedding_models/graph2vec/src/graph2vec.py",
             "--input-path",   str(INPUT_DIR),
             "--output-path",  str(EMBEDDINGS_CSV),
             "--dimensions",   str(args.dimensions),
@@ -182,7 +148,7 @@ def main():
 
         # ── Step 3: Postprocess ───────────────────────────────────────────────
         run([
-            sys.executable, "prepare_graph2vec_input.py",
+            sys.executable, "embedding_models/graph2vec_support.py",
             "--mode",        "postprocess",
             "--cities_json", str(filtered_json),
             "--input_dir",   str(INPUT_DIR),
@@ -191,11 +157,13 @@ def main():
         ], step="3/3 postprocess")
 
     # ── Step 4: Load into pgvector ────────────────────────────────────────────
-    if not EMBEDDINGS_CSV.exists():
-        print(f"[ERROR] Embeddings CSV not found: {EMBEDDINGS_CSV}")
+    EMBEDDINGS_CSV_NAMED = EMBEDDINGS_CSV.with_stem(EMBEDDINGS_CSV.stem + "_named")
+
+    if not EMBEDDINGS_CSV_NAMED.exists():
+        print(f"[ERROR] Embeddings CSV not found: {EMBEDDINGS_CSV_NAMED}")
         sys.exit(1)
 
-    df = pd.read_csv(EMBEDDINGS_CSV)
+    df = pd.read_csv(EMBEDDINGS_CSV_NAMED)
     print(f"[INFO] Loaded embeddings: {df.shape}  columns: {list(df.columns[:5])} ...")
 
     if "city" not in df.columns:
@@ -208,9 +176,7 @@ def main():
 
     conn = psycopg2.connect(**DB_CONFIG)
     try:
-        ensure_table(conn, dimensions=args.dimensions)
-        city_ids = get_city_ids(conn, args.cities)
-        upsert_embeddings(conn, df, city_ids, dimensions=args.dimensions)
+        upsert_embeddings(conn, df)
     finally:
         conn.close()
 

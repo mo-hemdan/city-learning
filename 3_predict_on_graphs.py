@@ -394,7 +394,7 @@ if __name__ == "__main__":
 
     edges_path  = os.path.join(args.data_dir, f"{args.target_city}_edges.parquet")
     speed_path  = os.path.join(args.data_dir, f"{args.target_city}_speed_matrix.npy")
-    output_path = args.output or os.path.join(args.data_dir, f"{args.target_city}_imputedBy_{args.source_city}.parquet")
+    output_path = os.path.join(args.data_dir, f"{args.target_city}_imputedBy_{args.source_city}.parquet")
 
     infer(
         edges_path       = edges_path,
