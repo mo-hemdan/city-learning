@@ -126,8 +126,13 @@ class ZScaler:
         self.sd = sd
 
     def fit(self, x: np.ndarray):
-        self.mu = np.nanmean(x)
-        self.sd = np.nanstd(x) + 1e-8
+        valid = x[~np.isnan(x)]
+        if valid.size == 0:
+            self.mu = 0.0
+            self.sd = 1.0
+            return
+        self.mu = float(np.mean(valid))
+        self.sd = float(np.std(valid)) + 1e-8
 
     def transform(self, x: np.ndarray):
         return (x - self.mu) / self.sd

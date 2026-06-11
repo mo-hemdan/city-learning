@@ -11,6 +11,7 @@ Usage
 """
 
 import argparse
+import json
 import os
 import sys
 sys.path.append(os.path.expanduser("~/websites/mapedia"))
@@ -19,6 +20,19 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import torch
+
+_CONSTRAINTS_PATH = os.path.join(os.path.dirname(__file__), "speed_constraints.json")
+with open(_CONSTRAINTS_PATH) as _f:
+    SPEED_CONSTRAINTS = json.load(_f)
+
+
+def apply_speed_constraints(arr, city, attr):
+    """Round to nearest 5 and clip to city-specific [min, max]."""
+    c = SPEED_CONSTRAINTS.get(city, {}).get(attr, {})
+    lo = c.get("min", 0)
+    hi = c.get("max", 999)
+    rounded = np.round(arr / 5.0) * 5.0
+    return np.clip(rounded, lo, hi).astype(np.float32)
 
 from src.processing import (
     aggregate_speed_matrix,
@@ -30,7 +44,8 @@ from src.processing import (
 )
 from src.models.multi_attr_gat import MultiAttrGAT
 from src.models.saveing import load_checkpoint
-from src.models.losses import compute_losses, compute_metrics
+from src.models.losses import compute_losses, compute_metrics, corrupt_inputs_with_flags
+from src.models.masking import make_fixed_masks
 
 # ─── Column offset constants (must match training script) ──────────────────────
 CONT_LENGTH_COL    = 0
@@ -80,10 +95,10 @@ def build_x_cont(edges, speed_matrix, len_scaler, wid_scaler, max_scaler, min_sc
  
     # Missing indicator flags (1 = was NaN in raw data)
     avg_speed_missing = np.isnan(avg_speed_flat).astype(np.float32)
-    width_missing     = np.isnan(width_z).astype(np.float32)
+    width_missing     = np.isnan(width_raw).astype(np.float32)
     length_missing    = np.zeros(N, dtype=np.float32)
-    max_missing       = np.isnan(max_z).astype(np.float32)
-    min_missing       = np.isnan(min_z).astype(np.float32)
+    max_missing       = np.isnan(max_raw).astype(np.float32)
+    min_missing       = np.isnan(min_raw).astype(np.float32)
  
     # Replace NaN with 0 after recording flags
     avg_speed_z = np.nan_to_num(avg_speed_z, nan=0.0)
@@ -91,6 +106,11 @@ def build_x_cont(edges, speed_matrix, len_scaler, wid_scaler, max_scaler, min_sc
     max_z       = np.nan_to_num(max_z,        nan=0.0)
     min_z       = np.nan_to_num(min_z,        nan=0.0)
  
+    # For truly missing values, set mask flags = 1 so the model sees the same
+    # input pattern it was trained on (artificially masked observed roads had
+    # value=0, missing_flag=0, mask_flag=1). Leaving mask flags at 0 for
+    # genuinely missing data puts them in an out-of-distribution pattern that
+    # the model never received gradient signal for, producing garbage outputs.
     x_cont = np.column_stack([
         length_z,                                      # 0
         width_z,                                       # 1
@@ -102,11 +122,11 @@ def build_x_cont(edges, speed_matrix, len_scaler, wid_scaler, max_scaler, min_sc
         max_missing,                                   # 18
         min_missing,                                   # 19
         avg_speed_missing,                             # 20-31
-        np.zeros(N, dtype=np.float32),                 # 32  len_mask  (all 0 at inference)
-        np.zeros(N, dtype=np.float32),                 # 33  wid_mask
-        np.zeros(N, dtype=np.float32),                 # 34  max_mask
-        np.zeros(N, dtype=np.float32),                 # 35  min_mask
-        np.zeros((N, 12), dtype=np.float32),           # 36-47 avg_mask
+        np.zeros(N, dtype=np.float32),                 # 32  len_mask
+        width_missing,                                 # 33  wid_mask  = missing flag
+        max_missing,                                   # 34  max_mask  = missing flag
+        min_missing,                                   # 35  min_mask  = missing flag
+        avg_speed_missing,                             # 36-47 avg_mask = missing flags
     ]).astype(np.float32)
  
     return x_cont, avg_speed_flat
@@ -219,23 +239,25 @@ def infer(edges_path: str,
 
         pred = model(x_cont, highway_in, nlanes_in, oneway_in, data.edge_index)
     
-    # ── Evaluate on all observed (non-missing) entries ───────────────────────
+    # ── Evaluate with masked inputs (true imputation quality) ────────────────
+    # Randomly mask 30% of observed roads (matching training p_mask) before the
+    # forward pass. This hides the value being predicted while leaving the other
+    # 70% visible to the GAT as context — the same conditions the model trained
+    # under. Masking 100% would be harder than training and give inflated errors;
+    # leaving inputs unmasked lets the model trivially invert the Z-score.
     with torch.no_grad():
-        eval_masks = {
-            "hwy": torch.ones(N, dtype=torch.bool, device=device),
-            "lan": (data.y_nlanes != -1),
-            "onw": ~torch.isnan(data.y_oneway),
-            "wid": ~torch.isnan(data.y_width),
-            "max": ~torch.isnan(data.y_max),
-            "min": ~torch.isnan(data.y_min),
-            "avg": ~torch.isnan(data.y_avg_speed),
-        }
+        eval_masks = make_fixed_masks(data, p_mask=0.30, seed=2025)
 
-        total_loss, losses = compute_losses(pred, data, eval_masks, model, device)
-        metrics            = compute_metrics(pred, data, eval_masks, num_highway)
+        x_cont_eval, hwy_eval, lan_eval, onw_eval = corrupt_inputs_with_flags(
+            data, eval_masks, HIGHWAY_MASK_ID
+        )
+        pred_eval = model(x_cont_eval, hwy_eval, lan_eval, onw_eval, data.edge_index)
 
-    print("\n=== Model evaluation on observed entries ===")
-    print(f"  {'attribute':<14}  {'loss':>8}  {'metric':>30}  {'n_obs':>8}")
+        total_loss, losses = compute_losses(pred_eval, data, eval_masks, model, device)
+        metrics            = compute_metrics(pred_eval, data, eval_masks, num_highway)
+
+    print("\n=== Model evaluation (30% masked, matching training conditions) ===")
+    print(f"  {'attribute':<14}  {'loss':>8}  {'metric':>30}  {'n_eval':>8}")
     print(f"  {'-'*14}  {'-'*8}  {'-'*30}  {'-'*8}")
     n_obs = {k: int(eval_masks[k].sum()) for k in eval_masks}
     rows = [
@@ -250,7 +272,17 @@ def infer(edges_path: str,
     for label, key, metric_str in rows:
         print(f"  {label:<14}  {losses[key].item():>8.4f}  {metric_str:>30}  {n_obs[key]:>8}")
     print(f"  {'TOTAL':<14}  {total_loss.item():>8.4f}")
-    
+
+    masked_max_idx = torch.where(eval_masks["max"])[0]
+    if len(masked_max_idx) >= 5:
+        picks = masked_max_idx[torch.linspace(0, len(masked_max_idx) - 1, 5).long()]
+        pred_max = pred_eval["max_speed"].detach()[picks].cpu().numpy()
+        true_max = data.y_max[picks].cpu().numpy()
+        print(f"\n  max_speed sample (km/h):")
+        print(f"  {'road_idx':>10}  {'pred':>8}  {'true':>8}  {'|err|':>8}")
+        for i, p, t in zip(picks.cpu().numpy(), pred_max, true_max):
+            print(f"  {i:>10}  {p:>8.1f}  {t:>8.1f}  {abs(p - t):>8.1f}")
+
     # ── Save evaluation results ───────────────────────────────────────────────
     eval_results = {
         "total_loss": total_loss.item(),
@@ -280,20 +312,16 @@ def infer(edges_path: str,
     onw_pred_prob = torch.sigmoid(pred["oneway"].squeeze(-1)).cpu().numpy()  # (N,)
     onw_pred      = (onw_pred_prob >= 0.5).astype(np.float32)
  
-    # width    → inverse-transform z-score → metres
-    wid_pred_z    = pred["width"].squeeze(-1).cpu().numpy()               # (N,)
-    wid_pred_m    = wid_scaler.inverse_transform(wid_pred_z)
- 
-    # max_speed / min_speed
-    max_pred_z    = pred["max_speed"].squeeze(-1).cpu().numpy()
-    max_pred      = max_scaler.inverse_transform(max_pred_z)
- 
-    min_pred_z    = pred["min_speed"].squeeze(-1).cpu().numpy()
-    min_pred      = min_scaler.inverse_transform(min_pred_z)
- 
-    # avg_speed  → (N, 12) z-scores → raw km/h  (no avg_scaler saved; leave as z-scores)
-    avg_pred_z    = pred["avg_speed"].cpu().numpy()                        # (N, 12)
-    avg_pred  = avg_scaler.inverse_transform(avg_pred_z)
+    # width / max_speed / min_speed / avg_speed
+    # Model was trained against raw (unscaled) targets, so predictions are already in original units.
+    wid_pred_m = pred["width"].squeeze(-1).cpu().numpy()        # metres
+    max_pred   = apply_speed_constraints(
+        pred["max_speed"].squeeze(-1).cpu().numpy(), target_city, "max_speed"
+    )
+    min_pred   = apply_speed_constraints(
+        pred["min_speed"].squeeze(-1).cpu().numpy(), target_city, "min_speed"
+    )
+    avg_pred   = pred["avg_speed"].cpu().numpy()                # (N, 12) km/h
  
 
     # ── Build output: fill NaN slots, keep observed values unchanged ──────────
@@ -349,6 +377,21 @@ def infer(edges_path: str,
             out[f"imputed_{col_name}"] = imputed
             col_idx += 1
 
+    # ── Sample of predictions for truly missing max_speed ────────────────────
+    missing_max_idx = np.where(missing_max.to_numpy())[0]
+    print(f"\n=== max_speed predictions for truly missing roads (n={len(missing_max_idx)}) ===")
+    if len(missing_max_idx) >= 50:
+        rng = np.random.default_rng(seed=42)
+        picks = rng.choice(missing_max_idx, size=50, replace=False)
+        picks = np.sort(picks)
+        print(f"  {'road_idx':>10}  {'max_speed':>10}  {'road_type':>14}  {'nlanes':>7}")
+        for i in picks:
+            print(f"  {i:>10}  {max_pred[i]:>10.1f}  {str(out['road_type'].iloc[i]):>14}  {str(out['nlanes'].iloc[i]):>7}")
+    else:
+        print(f"  fewer than 10 missing roads — showing all")
+        for i in missing_max_idx:
+            print(f"  road {i}  max_speed={max_pred[i]:.1f}")
+
     # ── Save ──────────────────────────────────────────────────────────────────
     out.to_parquet(output_path)
     print(f"\nSaved imputed GeoDataFrame → {output_path}")
@@ -381,9 +424,10 @@ def parse_args():
     p.add_argument("--source_city",            default="jakarta")
     p.add_argument("--target_city",            default="jakarta")
     p.add_argument("--data_dir",        default="./data/raw_data")
+    p.add_argument("--output_dir",        default="./data/imputed_data")
     p.add_argument("--checkpoint_dir",  default="./checkpoints")
-    p.add_argument("--output",          default='./data/imputed_data/jakarta.parquet',
-                   help="Output parquet path. Defaults to <data_dir>/<city>_imputed.parquet")
+    # p.add_argument("--output",          default='./data/imputed_data/jakarta.parquet',
+                #    help="Output parquet path. Defaults to <data_dir>/<city>_imputed.parquet")
     p.add_argument("--device",          default="cuda",
                    help="'auto', 'cpu', 'cuda', 'cuda:0', …")
     return p.parse_args()
@@ -394,7 +438,7 @@ if __name__ == "__main__":
 
     edges_path  = os.path.join(args.data_dir, f"{args.target_city}_edges.parquet")
     speed_path  = os.path.join(args.data_dir, f"{args.target_city}_speed_matrix.npy")
-    output_path = os.path.join(args.data_dir, f"{args.target_city}_imputedBy_{args.source_city}.parquet")
+    output_path = os.path.join(args.output_dir, f"{args.target_city}_imputedBy_{args.source_city}.parquet")
 
     infer(
         edges_path       = edges_path,

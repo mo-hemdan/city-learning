@@ -45,6 +45,8 @@ def parse_args():
     parser.add_argument("--test_frac",   type=float, default=0.10,           help="Fraction of data for test")
     parser.add_argument("--split_axis",  type=str,   default="lat",          choices=["lat", "lon"], help="Spatial split axis")
 
+    parser.add_argument("--resume",      type=str,   default=None,           help="Path to a checkpoint .pt file to resume training from")
+
     return parser.parse_args()
 
 
@@ -161,10 +163,10 @@ def main():
     min_z       = min_scaler.transform(min_raw).astype(np.float32)
 
     avg_speed_missing = np.isnan(avg_speed_flat).astype(np.float32)
-    width_missing     = np.isnan(width_z).astype(np.float32)
-    length_missing    = np.zeros_like(width_missing, dtype=np.float32)
-    max_missing       = np.isnan(max_z).astype(np.float32)
-    min_missing       = np.isnan(min_z).astype(np.float32)
+    width_missing     = np.isnan(width_raw).astype(np.float32)
+    length_missing    = np.zeros(N, dtype=np.float32)
+    max_missing       = np.isnan(max_raw).astype(np.float32)
+    min_missing       = np.isnan(min_raw).astype(np.float32)
 
     avg_speed_z = np.nan_to_num(avg_speed_z, nan=0.0)
     width_z     = np.nan_to_num(width_z,     nan=0.0)
@@ -272,7 +274,16 @@ def main():
     model = MultiAttrGAT(num_highway=num_highway, cont_dim=48).to(device)
     optimizer = get_optimizer(model.parameters())
 
-    # TODO: Remove the p_mask here, keep all validation as possible 
+    start_epoch = 1
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device, weights_only=True)
+        model.load_state_dict(ckpt["model_state"])
+        if "optimizer_state" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state"])
+        start_epoch = ckpt.get("epoch", 0) + 1
+        print(f"Resumed from {args.resume}  (epoch {start_epoch - 1} → continuing from {start_epoch})")
+
+    # TODO: Remove the p_mask here, keep all validation as possible
     val_masks_fixed = make_fixed_masks(data_val, p_mask=args.p_mask, seed=999)
 
     history = {
@@ -287,35 +298,35 @@ def main():
         "log_vars":     [],
     }
 
-    # Column index constants
-    CONT_LENGTH_COL   = 0
-    CONT_WIDTH_COL    = 1
-    CONT_MAX_COL      = 2
-    CONT_MIN_COL      = 3
-    CONT_AVG_START    = 4   # avg_speed_z occupies columns 4-15 (12 slots)
-    CONT_AVG_END      = 16  # exclusive
+    # # Column index constants
+    # CONT_LENGTH_COL   = 0
+    # CONT_WIDTH_COL    = 1
+    # CONT_MAX_COL      = 2
+    # CONT_MIN_COL      = 3
+    # CONT_AVG_START    = 4   # avg_speed_z occupies columns 4-15 (12 slots)
+    # CONT_AVG_END      = 16  # exclusive
 
 
-    CONT_LENMISS_COL  = 4
-    CONT_WIDMISS_COL  = 5
-    CONT_MAXMISS_COL  = 6
-    CONT_MINMISS_COL  = 7
-    CONT_AVGMISS_START = 20  # avg_speed_missing: columns 20-31
-    CONT_AVGMISS_END   = 32
+    # CONT_LENMISS_COL  = 4
+    # CONT_WIDMISS_COL  = 5
+    # CONT_MAXMISS_COL  = 6
+    # CONT_MINMISS_COL  = 7
+    # CONT_AVGMISS_START = 20  # avg_speed_missing: columns 20-31
+    # CONT_AVGMISS_END   = 32
 
-    CONT_LENMASK_COL  = 8
-    CONT_WIDMASK_COL  = 9
-    CONT_MAXMASK_COL  = 10
-    CONT_MINMASK_COL  = 11
-    CONT_AVGMASK_START = 36  # avg_speed_mask: columns 36-47
-    CONT_AVGMASK_END   = 48
+    # CONT_LENMASK_COL  = 8
+    # CONT_WIDMASK_COL  = 9
+    # CONT_MAXMASK_COL  = 10
+    # CONT_MINMASK_COL  = 11
+    # CONT_AVGMASK_START = 36  # avg_speed_mask: columns 36-47
+    # CONT_AVGMASK_END   = 48
 
     # =========================
     # 9) Training loop
     # =========================
     plot_avgspeed_nans_per_bin(data_train, os.path.join(args.plots_dir, "avgspeed_nans_per_bin.png"))
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         model.train()
         optimizer.zero_grad()
 
@@ -387,6 +398,30 @@ def main():
                 f"{'='*60}"
             )
 
+            if epoch > 50:
+                masked_max_idx = torch.where(train_masks["max"])[0]
+                if len(masked_max_idx) >= 5:
+                    picks = masked_max_idx[
+                        torch.linspace(0, len(masked_max_idx) - 1, 5).long()
+                    ]
+                    pred_max = pred["max_speed"].detach()[picks].cpu().numpy()
+                    true_max = data_train.y_max[picks].cpu().numpy()
+                    print(f"  max_speed sample (masked observed roads, km/h):")
+                    print(f"  {'road_idx':>10}  {'max_speed':>10}  {'true':>8}  {'|err|':>8}")
+                    for i, p, t in zip(picks.cpu().numpy(), pred_max, true_max):
+                        print(f"  {i:>10}  {p:>10.1f}  {t:>8.1f}  {abs(p - t):>8.1f}")
+
+                truly_missing_idx = torch.where(torch.isnan(data_train.y_max))[0]
+                if len(truly_missing_idx) >= 10:
+                    picks_m = truly_missing_idx[
+                        torch.randperm(len(truly_missing_idx), generator=torch.Generator().manual_seed(42))[:10]
+                    ].sort().values
+                    pred_missing = pred["max_speed"].detach()[picks_m].cpu().numpy()
+                    print(f"  max_speed sample (truly missing roads, km/h):")
+                    print(f"  {'road_idx':>10}  {'max_speed':>10}")
+                    for i, p in zip(picks_m.cpu().numpy(), pred_missing):
+                        print(f"  {i:>10}  {p:>10.1f}")
+
     # =========================
     # 10) Final evaluation
     # =========================
@@ -440,6 +475,8 @@ def main():
         P_MASK=args.p_mask,
         city=args.city,
         cont_dim=cont_dim,
+        optimizer=optimizer,
+        epoch=args.epochs,
     )
 
 

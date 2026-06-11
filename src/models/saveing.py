@@ -4,23 +4,25 @@ from ..processing import ZScaler
 SAVE_DIR = "./checkpoints"
 
 def save_checkpoint(model,
-                    num_highway, 
-                    hwy2id, 
+                    num_highway,
+                    hwy2id,
                     id2hwy,
-                    HIGHWAY_MASK_ID, 
+                    HIGHWAY_MASK_ID,
                     LANES_MASK_ID,
-                    LANES_MISS_ID, 
-                    ONEWAY_MASK_ID, 
-                    ONEWAY_MISS_ID, 
-                    len_scaler, 
-                    wid_scaler, 
+                    LANES_MISS_ID,
+                    ONEWAY_MASK_ID,
+                    ONEWAY_MISS_ID,
+                    len_scaler,
+                    wid_scaler,
                     max_scaler,
                     min_scaler,
                     avg_scaler,
-                    SEED, 
-                    P_MASK, 
+                    SEED,
+                    P_MASK,
                     city,
-                    cont_dim):
+                    cont_dim,
+                    optimizer=None,
+                    epoch=None):
     
     os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -77,7 +79,11 @@ def save_checkpoint(model,
             "seed": int(SEED),
             "split_axis": "lon",
             "p_mask": float(P_MASK),
-        }
+        },
+
+        # resume support
+        "optimizer_state": optimizer.state_dict() if optimizer is not None else None,
+        "epoch": int(epoch) if epoch is not None else None,
     }
 
     torch.save(checkpoint, ckpt_path)

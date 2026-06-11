@@ -1,0 +1,26 @@
+{
+  "jakarta": {
+    "max_speed": { "min": 5,  "max": 100 },
+    "min_speed": { "min": 0,  "max": 10  }
+  },
+  "singapore": {
+    "max_speed": { "min": 5,  "max": 110 },
+    "min_speed": { "min": 5,  "max": 50  }
+  },
+  "chicago": {
+    "max_speed": { "min": 5,  "max": 70  },
+    "min_speed": { "min": 5,  "max": 50  }
+  },
+  "NewYorkCity": {
+    "max_speed": { "min": 5,  "max": 65  },
+    "min_speed": { "min": 5,  "max": 50  }
+  },
+  "sanFrancisco": {
+    "max_speed": { "min": 5,  "max": 110 },
+    "min_speed": { "min": 5,  "max": 50  }
+  },
+  "washingtonDC": {
+    "max_speed": { "min": 5,  "max": 70  },
+    "min_speed": { "min": 5,  "max": 50  }
+  }
+}

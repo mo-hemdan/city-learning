@@ -6,7 +6,8 @@ from modules import DBHandler, DBUpdater
 import pandas as pd
 import numpy as np
 from modules.db_handler.DBConfig import INTER_CITY_LEARNING_SOURCE, INTRA_CITY_LEARNING_SOURCE, EMPTY_SOURCE
-PRESET_CONFIDENCE = 0.8
+PRESET_CONFIDENCE = 0.9
+PRESET_CONFIDENCE = 0.1
 import psycopg2
 from tqdm import tqdm
 import io
@@ -173,8 +174,8 @@ def upload_to_database(conn, ordered_ids, speed_matrix, speed_matrix_source, spe
         """)
 
         # 7. Cleanup Staging Table
-        print('Droping the newly created table')
-        cur.execute("DROP TABLE tmp_road_update;")
+        # print('Droping the newly created table')
+        # cur.execute("DROP TABLE tmp_road_update;")
 
         # Commit everything to the database at once
         print('Commiting')

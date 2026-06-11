@@ -32,6 +32,10 @@ for city in city_bounds:
         dtype=np.float32
     ).reshape(-1, N_SEASONS, N_DAYS_OF_WEEK, N_HOURS)
     
+    print('edges: ', edges['max_speed'])
+    print('speed_matrix', speed_matrix[:100][:100])
+    sys.exit(0)
+    
     print('Saving to disk')
     parquet_filename = SAVE_FOLDER + f"{city}_edges.parquet"
     edges[EDGES_KEEP_COLUMNS].to_parquet(parquet_filename)

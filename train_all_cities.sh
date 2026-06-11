@@ -21,7 +21,7 @@ gpu_idx=0
 for city in "${cities_array[@]}"; do
     echo "Launching: $city on GPU $gpu_idx"
 
-    python 2_train_on_graphs.py --city "$city" --device "cuda:$gpu_idx" \
+    python 2_train_on_graphs.py --epochs 1000 --city "$city" --device "cuda:$gpu_idx" \
         > "$LOG_DIR/${city}.log" 2>&1 &
 
     pids+=($!)
