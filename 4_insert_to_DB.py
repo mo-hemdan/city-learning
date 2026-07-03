@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from modules.db_handler.DBConfig import INTER_CITY_LEARNING_SOURCE, INTRA_CITY_LEARNING_SOURCE, EMPTY_SOURCE
 PRESET_CONFIDENCE = 0.9
-PRESET_CONFIDENCE = 0.1
+PRESET_CONFIDENCE = 0.15
 import psycopg2
 from tqdm import tqdm
 import io
@@ -181,14 +181,14 @@ def upload_to_database(conn, ordered_ids, speed_matrix, speed_matrix_source, spe
         print('Commiting')
         conn.commit()
 
-def insert(metadata, db_handler, source):
+def insert(metadata, db_handler, source, static_only=False):
     print('Taking the static metadata')
     pred_metadata = metadata[['mapd_id', 'osm_id',
-        'pred_road_type', 'pred_nlanes_cls',
+        'pred_road_type', 'pred_nlanes',
        'pred_oneway', 'pred_width', 'pred_max_speed', 'pred_min_speed']].copy()
     pred_metadata.rename(columns={
-        'pred_road_type': 'road_type', 
-        'pred_nlanes_cls': 'nlanes',
+        'pred_road_type': 'road_type',
+        'pred_nlanes': 'nlanes',
         'pred_oneway': 'oneway', 
         'pred_width': 'width', 
         'pred_max_speed': 'max_speed', 
@@ -200,51 +200,54 @@ def insert(metadata, db_handler, source):
         pred_metadata[f'{c}_conf'] = PRESET_CONFIDENCE
     
     
-    # Generating the Speed Matrix, Source and Confidence matricies as numpy arrays
-    print('Taking the Speed dynamic metadata')
-    speed_metadata_df = metadata[['mapd_id', 'osm_id',
-       'pred_avg_speed_weekday_00-04',
-       'pred_avg_speed_weekday_04-08',
-       'pred_avg_speed_weekday_08-12',
-       'pred_avg_speed_weekday_12-16',
-       'pred_avg_speed_weekday_16-20',
-       'pred_avg_speed_weekday_20-24',
-       'pred_avg_speed_weekend_00-04',
-       'pred_avg_speed_weekend_04-08',
-       'pred_avg_speed_weekend_08-12',
-       'pred_avg_speed_weekend_12-16',
-       'pred_avg_speed_weekend_16-20',
-       'pred_avg_speed_weekend_20-24']].copy()
-    print('Converting them into matricies')
-    speed_matrix  = convert_to_speed_matrix(speed_metadata_df)
-    speed_matrix_source = np.full(speed_matrix.shape, source, dtype=np.float32)
-    speed_matrix_source[np.isnan(speed_matrix)] = np.nan
-    speed_matrix_conf   = np.full(speed_matrix.shape, PRESET_CONFIDENCE, dtype=np.float32)
-    speed_matrix_conf[np.isnan(speed_matrix)] = np.nan
-    new_val = speed_matrix
-    new_source = speed_matrix_source
-    new_conf = speed_matrix_conf
-    
-    # Generating the 
-    print('Getting old values from the database')
-    ordered_ids = pred_metadata.mapd_id.to_numpy()
-    road_attributes = db_handler.roads_from_ids(ordered_ids.tolist())
-    
-    print('Converting them into matricies')
-    road_attr = road_attributes.loc[ordered_ids]
-    old_val = np.array(road_attr["avg_speed"].tolist(), dtype=np.float32)
-    old_source = np.array(road_attr["avg_speed_source"].tolist(), dtype=np.float32)
-    old_conf = np.array(road_attr["avg_speed_conf"].tolist(), dtype=np.float32)
+    if static_only:
+        print('Skipping the dynamic (avg_speed) part — static_only mode')
+    else:
+        # Generating the Speed Matrix, Source and Confidence matricies as numpy arrays
+        print('Taking the Speed dynamic metadata')
+        speed_metadata_df = metadata[['mapd_id', 'osm_id',
+           'pred_avg_speed_weekday_00-04',
+           'pred_avg_speed_weekday_04-08',
+           'pred_avg_speed_weekday_08-12',
+           'pred_avg_speed_weekday_12-16',
+           'pred_avg_speed_weekday_16-20',
+           'pred_avg_speed_weekday_20-24',
+           'pred_avg_speed_weekend_00-04',
+           'pred_avg_speed_weekend_04-08',
+           'pred_avg_speed_weekend_08-12',
+           'pred_avg_speed_weekend_12-16',
+           'pred_avg_speed_weekend_16-20',
+           'pred_avg_speed_weekend_20-24']].copy()
+        print('Converting them into matricies')
+        speed_matrix  = convert_to_speed_matrix(speed_metadata_df)
+        speed_matrix_source = np.full(speed_matrix.shape, source, dtype=np.float32)
+        speed_matrix_source[np.isnan(speed_matrix)] = np.nan
+        speed_matrix_conf   = np.full(speed_matrix.shape, PRESET_CONFIDENCE, dtype=np.float32)
+        speed_matrix_conf[np.isnan(speed_matrix)] = np.nan
+        new_val = speed_matrix
+        new_source = speed_matrix_source
+        new_conf = speed_matrix_conf
 
-    print('Masking the new values to the old ones')
-    val, source, conf = update_old_vals(old_val, old_source, old_conf, new_val, new_source, new_conf)
+        # Generating the
+        print('Getting old values from the database')
+        ordered_ids = pred_metadata.mapd_id.to_numpy()
+        road_attributes = db_handler.roads_from_ids(ordered_ids.tolist())
 
-    print('connecting to the database')
-    conn = connect_to_db_psycopg2()
-    
-    print('inserting to database the dynamic part')
-    upload_to_database(conn, ordered_ids, val, source, conf)
-    
+        print('Converting them into matricies')
+        road_attr = road_attributes.loc[ordered_ids]
+        old_val = np.array(road_attr["avg_speed"].tolist(), dtype=np.float32)
+        old_source = np.array(road_attr["avg_speed_source"].tolist(), dtype=np.float32)
+        old_conf = np.array(road_attr["avg_speed_conf"].tolist(), dtype=np.float32)
+
+        print('Masking the new values to the old ones')
+        val, source, conf = update_old_vals(old_val, old_source, old_conf, new_val, new_source, new_conf)
+
+        print('connecting to the database')
+        conn = connect_to_db_psycopg2()
+
+        print('inserting to database the dynamic part')
+        upload_to_database(conn, ordered_ids, val, source, conf)
+
     print('inserting to database the static part')
     db_updater = DBUpdater(db_handler)
     static_metadata = pred_metadata.set_index("mapd_id").rename_axis(None)
@@ -259,6 +262,8 @@ def parse_args():
     p.add_argument("--source_city",            default="jakarta")
     p.add_argument("--target_city",            default="jakarta")
     p.add_argument("--data_dir",        default="./data/imputed_data")
+    p.add_argument("--static_only",     action="store_true",
+                   help="Insert only the static attributes (skip the 672-slot avg_speed arrays)")
     # p.add_argument("--file", default="jakarta_imputedBy_jakarta.parquet")
     # p.add_argument("--checkpoint_dir",  default="./checkpoints")
     # p.add_argument("--input",          default='./data/imputed_data/jakarta.parquet',
@@ -278,4 +283,23 @@ if __name__ == "__main__":
     db_handler = DBHandler()
     db_handler.connect_to_db()
     
-    insert(metadata, db_handler, source)
+    from sqlalchemy import text
+    # query = text("""
+    #     SELECT id FROM road_attributes 
+    #     WHERE geometry && ST_MakeEnvelope(106.5660, -6.2609, 106.8184, -6.1242, 4326);
+    #     """)
+    
+    query = text("""
+        select id from road_attributes WHERE geometry && ST_MakeEnvelope(106.8077, -6.3986, 107.3124, -6.1252, 4326);
+        """)
+    with db_handler.engine.connect() as connection:
+        road_ids = [row[0] for row in connection.execute(query)]
+    
+    print(metadata.shape)
+    metadata = metadata[metadata.mapd_id.isin(road_ids)]
+    print(metadata.shape)
+    print(metadata.columns)
+    metadata['pred_road_type'] = metadata['road_type']
+    # sys.exit(0)
+    
+    insert(metadata, db_handler, source, static_only=args.static_only)

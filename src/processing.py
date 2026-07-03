@@ -70,22 +70,39 @@ def aggregate_speed_matrix(speed_matrix, period_labels=None):
     return final
 
 
+def nlanes_to_class_np(arr):
+    # arr: numpy float array
+    return np.select(
+        [np.isnan(arr), arr <= 0, arr <= 1, arr <= 2, arr <= 3],
+        [-1,            -1,       1,         2,         3],
+        default=0
+    ).astype(np.int64)
 
 def nlanes_to_class(s):
     '''
-    In this function, the nlanes are converted into a range of the following:
-    -1: Nan values
-    0: 1 lane or 0.5
-    1: 2 lanes or 1.5
-    2: 3 lanes or above (as default if above not satisfied)
+    Class label equals the lane count for 1-3 lanes; class 0 is reserved
+    for more than 3 lanes. 0 lanes is impossible, so raw values <= 0 are
+    treated as missing.
+    -1: NaN or <= 0 lanes (missing)
+    1: 1 lane (or 0.5)
+    2: 2 lanes (or 1.5)
+    3: 3 lanes (or 2.5)
+    0: more than 3 lanes (as default if above not satisfied)
     '''
-    
+
     return np.select(
-        [s.isna(), s <= 1, s <= 2], #s <= 3, s <= 4, s <= 5],
-        [-1, 0, 1],# 2, 3, 4],
-        default=2 #5 # all other nlanes 6+ are in one class
+        [s.isna(), s <= 0, s <= 1, s <= 2, s <= 3],
+        [-1, -1, 1, 2, 3],
+        default=0  # all nlanes above 3 share class 0
     )
-    
+
+def oneway_to_class_np(arr):
+    # arr: numpy float array
+    out = arr.copy().astype(np.float32)
+    out[arr == 2.0] = 1.0
+    out[arr == 3.0] = np.nan
+    return out
+
 def oneway_to_class(s):
     
     # additional value adjustment
@@ -118,7 +135,34 @@ def highway_to_class(road_types, hwy2id=None):
     HIGHWAY_MASK_ID = hwy2id[MASK_TOKEN]
 
     return highways_ids, HIGHWAY_MASK_ID, hwy2id, id2hwy, unique_highways, MASK_TOKEN, UNK_TOKEN
-    
+
+def highway_to_class_np(road_types_arr, hwy2id=None):
+    MASK_TOKEN = "__MASK__"
+    UNK_TOKEN  = "__UNK__"
+
+    # road_types_arr is object dtype; None/nan/float-nan all map to UNK
+    highway_vals = np.array([
+        UNK_TOKEN if (v is None or (isinstance(v, float) and np.isnan(v))) else str(v)
+        for v in road_types_arr
+    ])
+
+    if hwy2id is None:
+        unique_highways = sorted(np.unique(highway_vals).tolist())
+        if UNK_TOKEN not in unique_highways:
+            unique_highways.append(UNK_TOKEN)
+        unique_highways.append(MASK_TOKEN)
+        hwy2id = {h: i for i, h in enumerate(unique_highways)}
+    else:
+        unique_highways = list(hwy2id.keys())
+
+    id2hwy     = {i: h for h, i in hwy2id.items()}
+    UNK_ID     = hwy2id[UNK_TOKEN]
+    highways_ids = np.array([hwy2id.get(v, UNK_ID) for v in highway_vals], dtype=np.int64)
+    HIGHWAY_MASK_ID = hwy2id[MASK_TOKEN]
+
+    return highways_ids, HIGHWAY_MASK_ID, hwy2id, id2hwy, unique_highways, MASK_TOKEN, UNK_TOKEN
+
+
 class ZScaler:
     """Z-score scaler that ignores NaN."""
     def __init__(self, mu=None, sd=None):
@@ -188,11 +232,13 @@ def build_split_data(split_idx_np,
                      y_max_all,
                      y_min_all,
                      y_avg_speed_all,
-                     device
+                     device,
+                     test_masks=None,
+                     true_vals=None,
                      ):
-    split_idx_np = np.array(split_idx_np, dtype=np.int64)
-    split_idx_np = np.unique(split_idx_np)
-    split_idx_np.sort()
+    # split_idx_np = np.array(split_idx_np, dtype=np.int64)
+    # split_idx_np = np.unique(split_idx_np)
+    # split_idx_np.sort()
     
     # N must satisfy: N > max(edge_index_full_np)
     # and N > max(split_idx_np)
@@ -232,6 +278,23 @@ def build_split_data(split_idx_np,
     data.y_min = torch.from_numpy(y_min_all[split_idx_np]).float()
     data.y_avg_speed = torch.from_numpy(y_avg_speed_all[split_idx_np]).float()  # (n_split, 12)
     
+    # if (test_masks is not None) and (true_vals is not None):
+    #     # data.avg_speed_true = torch.from_numpy(true_vals['avg_speed'][split_idx_np]).float()
+    #     # data.width_true = torch.from_numpy(true_vals['width'][split_idx_np]).float()
+    #     # data.road_type_true = torch.from_numpy(true_vals['road_type'][split_idx_np]).float()
+    #     # data.nlanes_true = torch.from_numpy(true_vals['nlanes'][split_idx_np]).float()
+    #     # data.min_true = torch.from_numpy(true_vals['min'][split_idx_np]).float()
+    #     # data.max_true = torch.from_numpy(true_vals['max'][split_idx_np]).float()
+    #     # data.oneway_true = torch.from_numpy(true_vals['oneway'][split_idx_np]).float()
+    
+    #     data.avg_speed_mask = torch.from_numpy(test_masks['avg_speed']).float()
+    #     data.width_mask = torch.from_numpy(test_masks['width']).float()
+    #     data.road_type_mask = torch.from_numpy(test_masks['road_type']).float()
+    #     data.nlanes_mask = torch.from_numpy(test_masks['nlanes']).float()
+    #     data.min_mask = torch.from_numpy(test_masks['min']).float()
+    #     data.max_mask = torch.from_numpy(test_masks['max']).float()
+    #     data.oneway_mask = torch.from_numpy(test_masks['oneway']).float()
+        
     print("num_nodes:", data.num_nodes)
     print("edge_index max:", data.edge_index.max().item())
     print("edge_index min:", data.edge_index.min().item())

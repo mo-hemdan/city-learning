@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 
-LANES_MASK_ID = 3   # nlanes classes: 0,1,2 + MASK=3 + MISSING=4
-LANES_MISS_ID = 4
+LANES_MASK_ID = 4   # nlanes classes: 0,1,2,3 + MASK=4 + MISSING=5
+LANES_MISS_ID = 5
 
 # IMPORTANT CHANGE vs your original:
 # oneway embedding now supports a MISSING token too:
@@ -47,22 +47,31 @@ def avg_speed_loss(pred, target):
     return F.smooth_l1_loss(pred[mask], target[mask])
 
 
-def corrupt_inputs_with_flags(data, masks, HIGHWAY_MASK_ID):
+def corrupt_inputs_with_flags(data, masks, highway_corrupt_id):
+    """Hide masked attributes by making them look exactly like truly missing
+    data (value=0, missing=1, mask=1; categorical → MISSING/UNK token), so the
+    input pattern the model is supervised on matches what it sees at inference
+    for genuinely missing roads.
+
+    highway_corrupt_id should be the __UNK__ token id (what missing road_type
+    becomes at inference), not the __MASK__ token.
+    """
     x_cont = data.x_cont.clone()
     highway_in = data.highway_in.clone()
     nlanes_in = data.nlanes_in.clone()
     oneway_in = data.oneway_in.clone()
 
-    highway_in[masks["hwy"]] = HIGHWAY_MASK_ID
-    nlanes_in[masks["lan"]]   = LANES_MASK_ID
-    oneway_in[masks["onw"]]  = ONEWAY_MASK_ID
+    highway_in[masks["hwy"]] = highway_corrupt_id
+    nlanes_in[masks["lan"]]   = LANES_MISS_ID
+    oneway_in[masks["onw"]]  = ONEWAY_MISS_ID
 
-    # reset flags
+    # mask flags mirror the missing flags on the pristine input;
+    # masked entries below get both flags set to 1
     x_cont[:, CONT_LENMASK_COL] = 0.0
-    x_cont[:, CONT_WIDMASK_COL] = 0.0
-    x_cont[:, CONT_MAXMASK_COL] = 0.0
-    x_cont[:, CONT_MINMASK_COL] = 0.0
-    x_cont[:, CONT_AVGMASK_START:CONT_AVGMASK_END] = 0.0
+    x_cont[:, CONT_WIDMASK_COL] = x_cont[:, CONT_WIDMISS_COL]
+    x_cont[:, CONT_MAXMASK_COL] = x_cont[:, CONT_MAXMISS_COL]
+    x_cont[:, CONT_MINMASK_COL] = x_cont[:, CONT_MINMISS_COL]
+    x_cont[:, CONT_AVGMASK_START:CONT_AVGMASK_END] = x_cont[:, CONT_AVGMISS_START:CONT_AVGMISS_END]
 
     # IMPORTANT: we still can mask LENGTH as an *input corruption* channel to regularize
 
@@ -72,18 +81,20 @@ def corrupt_inputs_with_flags(data, masks, HIGHWAY_MASK_ID):
     # x_cont[masks["wid"], CONT_LENMASK_COL] = 1.0
 
     x_cont[masks["wid"], CONT_WIDTH_COL]  = 0.0
+    x_cont[masks["wid"], CONT_WIDMISS_COL] = 1.0
     x_cont[masks["wid"], CONT_WIDMASK_COL] = 1.0
 
     x_cont[masks["max"], CONT_MAX_COL] = 0.0
+    x_cont[masks["max"], CONT_MAXMISS_COL] = 1.0
     x_cont[masks["max"], CONT_MAXMASK_COL] = 1.0
 
     x_cont[masks["min"], CONT_MIN_COL] = 0.0
+    x_cont[masks["min"], CONT_MINMISS_COL] = 1.0
     x_cont[masks["min"], CONT_MINMASK_COL] = 1.0
-    
-    # corrupt avg_speed (zero out all 12 slots + set mask flags)
-    # x_cont[masks["avg"], CONT_AVG_START:CONT_AVG_END]     = 0.0
-    # x_cont[masks["avg"], CONT_AVGMASK_START:CONT_AVGMASK_END] = 1.0
+
+    # corrupt avg_speed (zero out masked slots + set missing/mask flags)
     x_cont[:, CONT_AVG_START:CONT_AVG_END][masks["avg"]]      = 0.0
+    x_cont[:, CONT_AVGMISS_START:CONT_AVGMISS_END][masks["avg"]] = 1.0
     x_cont[:, CONT_AVGMASK_START:CONT_AVGMASK_END][masks["avg"]] = 1.0
 
     return x_cont, highway_in, nlanes_in, oneway_in
@@ -182,7 +193,11 @@ def binary_auroc(y_true, scores):
     auroc = (sum_ranks_pos - n_pos_t * (n_pos_t + 1) / 2.0) / (n_pos_t * n_neg_t)
     return float(auroc)
 
-def compute_metrics(pred, data, masks, num_highway_classes):
+def compute_metrics(pred, data, masks, num_highway_classes, mae_scale=None):
+    # mae_scale: optional {"wid": sd, "max": sd, "min": sd, "avg": sd} — when
+    # regression targets are z-scored, multiplying the z-space MAE by the
+    # scaler's sd reports the metric in original units (m, km/h).
+    s = mae_scale or {}
     out = {}
 
     if masks["hwy"].any():
@@ -195,7 +210,7 @@ def compute_metrics(pred, data, masks, num_highway_classes):
     if masks["lan"].any():
         y_true = data.y_nlanes[masks["lan"]]
         y_pred = pred["nlanes"][masks["lan"]].argmax(dim=1)
-        out["lan_macro_f1"] = macro_f1_from_preds(y_true, y_pred, 3)
+        out["lan_macro_f1"] = macro_f1_from_preds(y_true, y_pred, 4)
     else:
         out["lan_macro_f1"] = np.nan
 
@@ -204,11 +219,11 @@ def compute_metrics(pred, data, masks, num_highway_classes):
     else:
         out["onw_auroc"] = np.nan
 
-    out["wid_mae_m"] = float(torch.mean(torch.abs(pred["width"][masks["wid"]] - data.y_width[masks["wid"]]))) \
+    out["wid_mae_m"] = float(torch.mean(torch.abs(pred["width"][masks["wid"]] - data.y_width[masks["wid"]]))) * s.get("wid", 1.0) \
         if masks["wid"].any() else np.nan
-    out["max_mae"] = float(torch.mean(torch.abs(pred["max_speed"][masks["max"]] - data.y_max[masks["max"]]))) \
-        if masks["max"].any() else np.nan   
-    out["min_mae"] = float(torch.mean(torch.abs(pred["min_speed"][masks["min"]] - data.y_min[masks["min"]]))) \
+    out["max_mae"] = float(torch.mean(torch.abs(pred["max_speed"][masks["max"]] - data.y_max[masks["max"]]))) * s.get("max", 1.0) \
+        if masks["max"].any() else np.nan
+    out["min_mae"] = float(torch.mean(torch.abs(pred["min_speed"][masks["min"]] - data.y_min[masks["min"]]))) * s.get("min", 1.0) \
         if masks["min"].any() else np.nan
     # NOTE: no length metric (length is input-only)
     
@@ -225,24 +240,66 @@ def compute_metrics(pred, data, masks, num_highway_classes):
     if masks["avg"].any():
         out["avg_mae"] = float(torch.mean(torch.abs(
             pred["avg_speed"][masks["avg"]] - data.y_avg_speed[masks["avg"]]
-        )))
+        ))) * s.get("avg", 1.0)
+    else:
+        out["avg_mae"] = np.nan
+    return out
+
+def compute_test_metrics(pred, data, num_highway_classes, mae_scale=None):
+    # mae_scale: optional {"wid": sd, "max": sd, "min": sd, "avg": sd} — when
+    # regression targets are z-scored, multiplying the z-space MAE by the
+    # scaler's sd reports the metric in original units (m, km/h).
+    s = mae_scale or {}
+    out = {}
+
+    if masks["hwy"].any():
+        y_true = data.y_highway[masks["hwy"]]
+        y_pred = pred["highway"][masks["hwy"]].argmax(dim=1)
+        out["hwy_macro_f1"] = macro_f1_from_preds(y_true, y_pred, num_highway_classes)
+    else:
+        out["hwy_macro_f1"] = np.nan
+
+    if masks["lan"].any():
+        y_true = data.y_nlanes[masks["lan"]]
+        y_pred = pred["nlanes"][masks["lan"]].argmax(dim=1)
+        out["lan_macro_f1"] = macro_f1_from_preds(y_true, y_pred, 4)
+    else:
+        out["lan_macro_f1"] = np.nan
+
+    if masks["onw"].any():
+        out["onw_auroc"] = binary_auroc(data.y_oneway[masks["onw"]], pred["oneway"][masks["onw"]])
+    else:
+        out["onw_auroc"] = np.nan
+
+    out["wid_mae_m"] = float(torch.mean(torch.abs(pred["width"][masks["wid"]] - data.y_width[masks["wid"]]))) * s.get("wid", 1.0) \
+        if masks["wid"].any() else np.nan
+    out["max_mae"] = float(torch.mean(torch.abs(pred["max_speed"][masks["max"]] - data.y_max[masks["max"]]))) * s.get("max", 1.0) \
+        if masks["max"].any() else np.nan
+    out["min_mae"] = float(torch.mean(torch.abs(pred["min_speed"][masks["min"]] - data.y_min[masks["min"]]))) * s.get("min", 1.0) \
+        if masks["min"].any() else np.nan
+    
+
+    if masks["avg"].any():
+        out["avg_mae"] = float(torch.mean(torch.abs(
+            pred["avg_speed"][masks["avg"]] - data.y_avg_speed[masks["avg"]]
+        ))) * s.get("avg", 1.0)
     else:
         out["avg_mae"] = np.nan
     return out
 
 @torch.no_grad()
-def evaluate_with_masks(model, data, masks, num_highway_classes, device, HIGHWAY_MASK_ID):
+def evaluate_with_masks(model, data, masks, num_highway_classes, device, highway_corrupt_id, mae_scale=None):
     model.eval()
-    x_cont, highway_in, nlanes_in, oneway_in = corrupt_inputs_with_flags(data, masks, HIGHWAY_MASK_ID)
+    x_cont, highway_in, nlanes_in, oneway_in = corrupt_inputs_with_flags(data, masks, highway_corrupt_id)
     pred = model(x_cont, highway_in, nlanes_in, oneway_in, data.edge_index)
     total, losses = compute_losses(pred, data, masks, model, device)
-    metrics = compute_metrics(pred, data, masks, num_highway_classes)
+    metrics = compute_metrics(pred, data, masks, num_highway_classes, mae_scale)
     return total.item(), {k: v.item() for k, v in losses.items()}, metrics
 
 @torch.no_grad()
-def evaluate_losses_only(model, data, masks, device, HIGHWAY_MASK_ID):
+def evaluate_losses_only(model, data, masks, device, highway_corrupt_id):
     model.eval()
-    x_cont, highway_in, nlanes_in, oneway_in = corrupt_inputs_with_flags(data, masks, HIGHWAY_MASK_ID)
+    x_cont, highway_in, nlanes_in, oneway_in = corrupt_inputs_with_flags(data, masks, highway_corrupt_id)
     pred = model(x_cont, highway_in, nlanes_in, oneway_in, data.edge_index)
     total, losses = compute_losses(pred, data, masks, model, device)
     return total.item(), {k: v.item() for k, v in losses.items()}

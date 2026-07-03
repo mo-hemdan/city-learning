@@ -13,29 +13,20 @@ class MultiAttrGAT(nn.Module):
     def __init__(self, num_highway, hwy_emb_dim=16,
                  nlanes_emb_dim=8, oneway_emb_dim=4,
                 cont_dim=48, avg_speed_dim=12, 
-                 hidden=32, heads=2, dropout=0.1, n_conv_layers=2):
+                 hidden=32, heads=2, dropout=0.1):
         super().__init__()
 
         self.hwy_emb = nn.Embedding(num_highway, hwy_emb_dim)
-        self.nlanes_emb = nn.Embedding(6, nlanes_emb_dim)    # 0,1,2,3, MASK=4, MISS=5
+        self.nlanes_emb = nn.Embedding(6, nlanes_emb_dim)    # 0,1,2, MASK=3, MISS=4 # TODO: Change it to 5 back
         self.oneway_emb = nn.Embedding(4, oneway_emb_dim)  # 0,1, MASK=2, MISS=3 
 
         in_dim = cont_dim + hwy_emb_dim + nlanes_emb_dim + oneway_emb_dim
 
-        # n_conv_layers = total number of GAT layers. All but the last use concat=True
-        # (head outputs stacked); the last uses concat=False (averaged) so head inputs
-        # stay `hidden`-wide. n_conv_layers=2 reproduces the original (gat1, gat2) stack.
-        assert n_conv_layers >= 1, "n_conv_layers must be >= 1"
-        self.gats = nn.ModuleList()
-        for i in range(n_conv_layers):
-            in_c = in_dim if i == 0 else hidden * heads
-            is_last = i == n_conv_layers - 1
-            self.gats.append(
-                GATv2Conv(in_c, hidden, heads=heads, concat=not is_last, dropout=dropout)
-            )
+        self.gat1 = GATv2Conv(in_dim, hidden, heads=heads, concat=True, dropout=dropout)
+        self.gat2 = GATv2Conv(hidden * heads, hidden, heads=heads, concat=False, dropout=dropout)
 
         self.head_highway = nn.Linear(hidden, num_highway)
-        self.head_nlanes   = nn.Linear(hidden, 4)
+        self.head_nlanes   = nn.Linear(hidden, 4) # TODO: Change it back to 3 the correct one
         self.head_oneway  = nn.Linear(hidden, 1)
         self.head_width   = nn.Linear(hidden, 1)
         self.head_max = nn.Linear(hidden, 1)
@@ -52,9 +43,8 @@ class MultiAttrGAT(nn.Module):
 
         x = torch.cat([x_cont, hwy, lan, onw], dim=1)
 
-        h = x
-        for gat in self.gats:
-            h = F.elu(gat(h, edge_index))
+        h = F.elu(self.gat1(x, edge_index))
+        h = F.elu(self.gat2(h, edge_index))
 
         return {
             "highway": self.head_highway(h),

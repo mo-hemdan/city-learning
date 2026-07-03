@@ -22,11 +22,12 @@ def save_checkpoint(model,
                     city,
                     cont_dim,
                     optimizer=None,
-                    epoch=None):
+                    epoch=None,
+                    path_sufx=''):
     
     os.makedirs(SAVE_DIR, exist_ok=True)
 
-    ckpt_path = os.path.join(SAVE_DIR, f"{city}_gat_multitask.pt")
+    ckpt_path = os.path.join(SAVE_DIR, f"{city}/gat_multitask{path_sufx}_e{epoch}.pt")
 
     checkpoint = {
         # model

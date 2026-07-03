@@ -12,6 +12,9 @@ Usage:
     --dimensions 128 \
     --epochs 50 \
     --workers 4
+    
+    python 5_embed_using_graph2vec.py \
+    --cities jakarta singapore chicago NewYorkCity sanFrancisco washingtonDC 
 """
 
 import argparse

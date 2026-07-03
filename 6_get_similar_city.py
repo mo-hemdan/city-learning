@@ -38,6 +38,7 @@ def main(args):
         similar_city = row[0] if row else None
     
     print('Similar City is ', similar_city)
+    sys.exit(0)
     
     result = subprocess.run(['python', '3_predict_on_graphs.py', '--source_city', similar_city, '--target_city', city], check=True)
     if result.returncode != 0:

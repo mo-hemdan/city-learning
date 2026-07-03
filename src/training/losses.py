@@ -156,7 +156,7 @@ def compute_metrics(pred: dict, data: Data, masks: dict, num_highway_classes: in
     if masks["lan"].any():
         y_true = data.y_lanes[masks["lan"]]
         y_pred = pred["lanes"][masks["lan"]].argmax(dim=1)
-        out["lan_macro_f1"] = macro_f1_from_preds(y_true, y_pred, 3)
+        out["lan_macro_f1"] = macro_f1_from_preds(y_true, y_pred, 4)
     else:
         out["lan_macro_f1"] = np.nan
 

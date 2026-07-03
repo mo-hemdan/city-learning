@@ -46,6 +46,8 @@ import geopandas as gpd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 from collections import Counter
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.decomposition import PCA
@@ -235,29 +237,53 @@ def prepare(data_dir, cities_json, input_dir, feature_mode):
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
 def plot_similarity_matrix(sim_matrix, cities, out_path, font_scale=1.0):
-    N    = len(cities)
-    BASE = 35   # base font size — adjust this one number
-    FS   = 5.5
-    fig, ax = plt.subplots(figsize=(N * FS * 0.55 + 1.5, N * FS * 0.5 + 1))
+    N   = len(cities)
+    fig, ax = plt.subplots(figsize=(max(6, N * 1.1), max(5, N * 1.0)))
+
+    masked = np.ma.masked_invalid(sim_matrix)
+    cmap   = plt.get_cmap("viridis").copy()
+    cmap.set_bad(color="#cccccc")
+
     vmin = np.nanmin(sim_matrix)
     vmax = np.nanmax(sim_matrix)
-    im   = ax.imshow(sim_matrix, cmap="coolwarm", vmin=vmin, vmax=vmax)
-    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    cbar.set_label(f"Cosine Similarity  [{vmin:.3f} – {vmax:.3f}]", fontsize=BASE * font_scale)
-    cbar.ax.tick_params(labelsize=(BASE - 1) * font_scale)
-    ax.set_xticks(range(N)); ax.set_yticks(range(N))
-    ax.set_xticklabels(cities, rotation=35, ha="right", fontsize=BASE * font_scale, fontweight="bold")
-    ax.set_yticklabels(cities, fontsize=BASE * font_scale, fontweight="bold")
-    ax.set_title("City Graph Structural Similarity\n(Graph2Vec)", fontsize=(BASE + 3) * font_scale,
-                 fontweight="bold", pad=14)
+    norm = Normalize(vmin=vmin, vmax=vmax)
+
+    ax.imshow(masked, cmap=cmap, norm=norm, aspect="auto")
+
+    cbar = fig.colorbar(ScalarMappable(norm=norm, cmap=cmap),
+                        ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=9)
+    cbar.set_label("↑ higher is better", fontsize=9, labelpad=8)
+
+    ax.set_xticks(range(N))
+    ax.set_yticks(range(N))
+    ax.set_xticklabels(cities, rotation=35, ha="right", fontsize=10)
+    ax.set_yticklabels(cities, fontsize=10)
+    ax.set_xlabel("City", fontsize=11, labelpad=8)
+    ax.set_ylabel("City", fontsize=11, labelpad=8)
+
     for i in range(N):
         for j in range(N):
-            val   = sim_matrix[i, j]
-            color = "white" if abs(val - (vmin + vmax) / 2) > (vmax - vmin) * 0.25 else "black"
-            ax.text(j, i, f"{val:.3f}", ha="center", va="center",
-                    fontsize=(BASE - 1) * font_scale, color=color, fontweight="bold")
-        ax.add_patch(plt.Rectangle((i - 0.5, i - 0.5), 1, 1,
-                     fill=False, edgecolor="steelblue", linewidth=3.0))
+            val = sim_matrix[i, j]
+            if np.isnan(val):
+                txt, color = "N/A", "#555555"
+            else:
+                normed = (val - vmin) / (vmax - vmin + 1e-9)
+                r, g, b, _ = cmap(normed)
+                luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                color = "white" if luminance < 0.5 else "black"
+                txt = f"{val:.3f}"
+            ax.text(j, i, txt, ha="center", va="center",
+                    fontsize=8.5, color=color, fontweight="bold")
+
+    for k in range(N):
+        ax.add_patch(plt.Rectangle(
+            (k - 0.5, k - 0.5), 1, 1,
+            fill=False, edgecolor="steelblue", linewidth=2.0
+        ))
+
+    ax.set_title("City Graph Structural Similarity\n(Graph2Vec)",
+                 fontsize=13, fontweight="bold", pad=14)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

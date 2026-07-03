@@ -9,6 +9,10 @@ Usage
     python plot_cross_city.py \
         --results_dir ./results \
         --output_dir  ./cross-city-results
+for finetuning
+    python plot_cross_city.py \
+        --results_dir ./results/finetuned \
+        --output_dir  ./cross-city-results/finetuned
 """
 
 import argparse
@@ -32,22 +36,22 @@ from matplotlib.cm import ScalarMappable
 # json_path uses dot notation to navigate nested dicts, e.g. "losses.hwy"
 QUANTITIES = [
     # losses
-    ("total_loss",      "Total Loss",            "YlOrRd",   True),
-    ("losses.hwy",      "Highway Loss (CE)",      "YlOrRd",   True),
-    ("losses.lan",      "Lanes Loss (CE)",         "YlOrRd",   True),
-    ("losses.onw",      "Oneway Loss (BCE)",        "YlOrRd",   True),
-    ("losses.wid",      "Width Loss (Huber)",       "YlOrRd",   True),
-    ("losses.max",      "Max Speed Loss (Huber)",   "YlOrRd",   True),
-    ("losses.min",      "Min Speed Loss (Huber)",   "YlOrRd",   True),
-    ("losses.avg",      "Avg Speed Loss (Huber)",   "YlOrRd",   True),
+    ("total_loss",      "Total Loss",            "viridis_r",   True),
+    ("losses.hwy",      "Highway Loss (CE)",      "viridis_r",   True),
+    ("losses.lan",      "Lanes Loss (CE)",         "viridis_r",   True),
+    ("losses.onw",      "Oneway Loss (BCE)",        "viridis_r",   True),
+    ("losses.wid",      "Width Loss (Huber)",       "viridis_r",   True),
+    ("losses.max",      "Max Speed Loss (Huber)",   "viridis_r",   True),
+    ("losses.min",      "Min Speed Loss (Huber)",   "viridis_r",   True),
+    ("losses.avg",      "Avg Speed Loss (Huber)",   "viridis_r",   True),
     # metrics
-    ("metrics.hwy_macro_f1", "Highway Macro-F1",   "YlGn",    False),
-    ("metrics.lan_macro_f1", "Lanes Macro-F1",      "YlGn",    False),
-    ("metrics.onw_auroc",    "Oneway AUROC",         "YlGn",    False),
-    ("metrics.wid_mae_m",    "Width MAE (m)",        "YlOrRd",   True),
-    ("metrics.max_mae",      "Max Speed MAE",        "YlOrRd",   True),
-    ("metrics.min_mae",      "Min Speed MAE",        "YlOrRd",   True),
-    ("metrics.avg_mae",      "Avg Speed MAE",        "YlOrRd",   True),
+    ("metrics.hwy_macro_f1", "Highway Macro-F1",   "viridis",    False),
+    ("metrics.lan_macro_f1", "Lanes Macro-F1",      "viridis",    False),
+    ("metrics.onw_auroc",    "Oneway AUROC",         "viridis",    False),
+    ("metrics.wid_mae_m",    "Width MAE (m)",        "viridis_r",   True),
+    ("metrics.max_mae",      "Max Speed MAE",        "viridis_r",   True),
+    ("metrics.min_mae",      "Min Speed MAE",        "viridis_r",   True),
+    ("metrics.avg_mae",      "Avg Speed MAE",        "viridis_r",   True),
 ]
 
 FILE_RE = re.compile(r"^(.+)_2_(.+)_eval_results\.json$")
@@ -86,6 +90,7 @@ def load_results(results_dir: str):
         city_set.add(target)
 
     cities = sorted(city_set)
+    cities = ['jakarta', 'singapore', 'chicago', 'NewYorkCity', 'sanFrancisco', 'washingtonDC']
     return data, cities
 
 
@@ -143,9 +148,11 @@ def plot_matrix(mat, cities, title, cmap, lower_is_better, out_path):
                 txt = "N/A"
                 color = "#555555"
             else:
-                # Pick white or black text based on relative brightness
+                # Pick white or black text based on cell luminance
                 normed = (val - vmin) / (vmax - vmin + 1e-9)
-                color = "white" if normed > 0.55 else "black"
+                r, g, b, _ = current_cmap(normed)
+                luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                color = "white" if luminance < 0.5 else "black"
                 txt = f"{val:.3f}"
             ax.text(j, i, txt, ha="center", va="center",
                     fontsize=8.5, color=color, fontweight="bold")

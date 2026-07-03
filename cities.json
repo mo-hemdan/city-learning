@@ -18,10 +18,10 @@
     "max_lon": -87.5226
   },
   "NewYorkCity": {
-    "min_lat": 40.2984,
-    "max_lat": 41.1207,
-    "min_lon": -74.4063,
-    "max_lon": -73.5521
+    "min_lat": 40.5555,
+    "max_lat": 40.8725,
+    "min_lon": -74.0863,
+    "max_lon": -73.74
   },
   "sanFrancisco": {
     "min_lat": 37.5982,

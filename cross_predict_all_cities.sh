@@ -23,7 +23,7 @@ for source_city in $cities; do
             --target_city "$target_city" \
             --data_dir "$DATA_DIR" \
             --checkpoint_dir "$CHECKPOINT_DIR" \
-            --output "$OUTPUT_DIR/${target_city}_imputedBy_${source_city}.parquet" \
+            --output_dir "$OUTPUT_DIR" \
             --device "$DEVICE" \
             2>&1 | tee "$LOG_DIR/${source_city}_2_${target_city}.log"
 

@@ -13,6 +13,7 @@ data/
 cache/
 saved_models/
 logs/
+tb_logs/
 
 # OS Junk
 .DS_Store
@@ -28,3 +29,9 @@ Thumbs.db
 checkpoints/*
 plots/*
 results/*
+
+
+tb_logs*
+
+metadata-availability
+cross-city-results

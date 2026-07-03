@@ -1,12 +1,16 @@
 
 import torch
 
-def make_fixed_masks(data, p_mask, seed=999):
+def make_fixed_masks(data, p_mask, seed=999, hwy_unk_id=None):
     gen = torch.Generator(device=data.y_highway.device)
     gen.manual_seed(seed)
 
     n = data.num_nodes
-    valid_hwy = torch.ones(n, dtype=torch.bool, device=data.y_highway.device)
+    # exclude __UNK__ targets so the model is never supervised to predict UNK
+    if hwy_unk_id is not None:
+        valid_hwy = (data.y_highway != hwy_unk_id)
+    else:
+        valid_hwy = torch.ones(n, dtype=torch.bool, device=data.y_highway.device)
     valid_lan = (data.y_nlanes != -1)
 
     # oneway: only valid where we know label (not NaN)

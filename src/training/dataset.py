@@ -23,8 +23,8 @@ from ..utils.utils import ZScaler, lanes_to_class
 MASK_TOKEN = "__MASK__"
 UNK_TOKEN = "__UNK__"
 
-LANES_MASK_ID = 3   # classes: 0,1,2 | MASK=3 | MISSING=4
-LANES_MISS_ID = 4
+LANES_MASK_ID = 4   # classes: 0,1,2,3 | MASK=4 | MISSING=5
+LANES_MISS_ID = 5
 
 ONEWAY_MASK_ID = 2  # values: 0,1 | MASK=2 | MISSING=3
 ONEWAY_MISS_ID = 3

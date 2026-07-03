@@ -43,9 +43,9 @@ from src.processing import (
     build_split_data,
 )
 from src.models.multi_attr_gat import MultiAttrGAT
-from src.models.saveing import load_checkpoint
+from src.models.saveing import load_checkpoint, save_checkpoint
 from src.models.losses import compute_losses, compute_metrics, corrupt_inputs_with_flags
-from src.models.masking import make_fixed_masks
+from src.models.masking import make_fixed_masks, bernoulli_mask
 from src.models.scarcity import (
     compute_attr_availability, compute_neighbor_availability,
     evaluate_scarcity_bins, plot_scarcity_bins
@@ -135,6 +135,133 @@ def build_x_cont(edges, speed_matrix, len_scaler, wid_scaler, max_scaler, min_sc
  
     return x_cont, avg_speed_flat
 
+
+# ─── Fine-tuning helpers ─────────────────────────────────────────────────────
+def restrict_masks(masks, subset_bool):
+    """AND every mask in `masks` with a per-node boolean subset (e.g. "is train
+    node"), broadcasting over the extra time-of-day dimension for avg_speed."""
+    out = {}
+    for k, v in masks.items():
+        out[k] = v & subset_bool.unsqueeze(1) if v.dim() > 1 else v & subset_bool
+    return out
+
+
+def load_or_build_split(edges, N, pyg_data_dir, target_city, train_frac, val_frac, device):
+    """Reuse the train/val/test node split saved by 1.2_split_train_test.py for
+    this city if present; otherwise fall back to the same spatial (lat) split
+    computed inline so the script still works without that pre-processing step."""
+    train_path = os.path.join(pyg_data_dir, f"{target_city}_train_idx.npy")
+    val_path   = os.path.join(pyg_data_dir, f"{target_city}_val_idx.npy")
+    test_path  = os.path.join(pyg_data_dir, f"{target_city}_test_idx.npy")
+
+    if os.path.exists(train_path) and os.path.exists(val_path) and os.path.exists(test_path):
+        train_idx = np.load(train_path)
+        val_idx   = np.load(val_path)
+        test_idx  = np.load(test_path)
+        if len(train_idx) + len(val_idx) + len(test_idx) == N:
+            print(f"Loaded target-city split from {pyg_data_dir}  "
+                  f"(train={len(train_idx)} val={len(val_idx)} test={len(test_idx)})")
+        else:
+            print("Warning: saved split size doesn't match current edge count — rebuilding split inline.")
+            train_idx = val_idx = test_idx = None
+    else:
+        train_idx = val_idx = test_idx = None
+
+    if train_idx is None:
+        n_train = int(round(train_frac * N))
+        n_val   = int(round(val_frac * N))
+        centroids = edges.geometry.centroid
+        coord = centroids.y.to_numpy()  # 'lat' axis, matching 1.2_split_train_test.py default
+        order = np.argsort(coord, kind="stable")
+        train_idx = np.sort(order[:n_train]).astype(np.int64)
+        val_idx   = np.sort(order[n_train:n_train + n_val]).astype(np.int64)
+        test_idx  = np.sort(order[n_train + n_val:]).astype(np.int64)
+        print(f"Built spatial train/val/test split inline  "
+              f"(train={len(train_idx)} val={len(val_idx)} test={len(test_idx)})")
+
+    def to_bool(idx):
+        b = torch.zeros(N, dtype=torch.bool, device=device)
+        b[torch.from_numpy(idx).long().to(device)] = True
+        return b
+
+    return to_bool(train_idx), to_bool(val_idx), to_bool(test_idx)
+
+
+def finetune_on_target(model, data, train_bool, val_bool, HIGHWAY_UNK_ID, device,
+                        epochs=150, lr=1e-4, p_mask=0.30, patience=20, log_every=10):
+    """Fine-tune a source-pretrained model on the target city's train split.
+
+    Forward passes always run on the *full* target graph so the GAT still has
+    every node (train + val + test) as message-passing context — only the
+    loss/backward is restricted to train nodes, and only fixed, held-out masks
+    on val nodes are used to decide when to stop. Test nodes are never touched
+    here; they stay reserved for the final, honest evaluation in infer().
+    """
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+
+    valid = {
+        "hwy": data.y_highway != HIGHWAY_UNK_ID,
+        "lan": data.y_nlanes != -1,
+        "onw": ~torch.isnan(data.y_oneway),
+        "wid": ~torch.isnan(data.y_width),
+        "max": ~torch.isnan(data.y_max),
+        "min": ~torch.isnan(data.y_min),
+        "avg": ~torch.isnan(data.y_avg_speed),
+    }
+
+    # Fixed (non-resampled) validation masks so val loss is comparable epoch to epoch.
+    val_masks = restrict_masks(
+        make_fixed_masks(data, p_mask=p_mask, seed=999, hwy_unk_id=HIGHWAY_UNK_ID), val_bool
+    )
+
+    best_val = float("inf")
+    best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    no_improve = 0
+
+    print(f"\n=== Fine-tuning on target train split (n={int(train_bool.sum())}) "
+          f"| validating on val split (n={int(val_bool.sum())}) ===")
+    for epoch in range(1, epochs + 1):
+        model.train()
+        optimizer.zero_grad()
+
+        train_masks = restrict_masks(
+            {k: bernoulli_mask(v, p_mask) for k, v in valid.items()}, train_bool
+        )
+        x_cont, hwy_in, lan_in, onw_in = corrupt_inputs_with_flags(data, train_masks, HIGHWAY_UNK_ID)
+        pred = model(x_cont, hwy_in, lan_in, onw_in, data.edge_index)
+        train_total, train_losses = compute_losses(pred, data, train_masks, model, device)
+        train_total.backward()
+        optimizer.step()
+
+        model.eval()
+        with torch.no_grad():
+            x_cont_v, hwy_v, lan_v, onw_v = corrupt_inputs_with_flags(data, val_masks, HIGHWAY_UNK_ID)
+            pred_v = model(x_cont_v, hwy_v, lan_v, onw_v, data.edge_index)
+            val_total, _ = compute_losses(pred_v, data, val_masks, model, device)
+        val_loss = val_total.item()
+
+        improved = val_loss < best_val - 1e-4
+        if improved:
+            best_val = val_loss
+            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+
+        if epoch == 1 or epoch % log_every == 0 or improved:
+            print(f"  [ft] epoch {epoch:04d}/{epochs}  train_loss={train_total.item():.4f}  "
+                  f"val_loss={val_loss:.4f}{'  *best*' if improved else ''}")
+
+        if no_improve >= patience:
+            print(f"  [ft] early stopping at epoch {epoch} (no val improvement for {patience} epochs)")
+            break
+
+    model.load_state_dict(best_state)
+    model.eval()
+    print(f"  [ft] restored best-val checkpoint  (val_loss={best_val:.4f})\n")
+    return model
+
+
 def infer(edges_path: str,
           speed_matrix_path: str,
           checkpoint_dir: str,
@@ -142,8 +269,18 @@ def infer(edges_path: str,
           target_city: str,
           output_path: str,
           plots_dir: str = "./plots/cross-city/",
+          results_dir: str = "./results",
           n_bins: int = 5,
-          device_str: str = "auto"):
+          device_str: str = "auto",
+          pyg_data_dir: str = "./data/pyg_data/",
+          finetune: bool = True,
+          ft_epochs: int = 150,
+          ft_lr: float = 1e-4,
+          ft_p_mask: float = 0.30,
+          ft_patience: int = 20,
+          ft_train_frac: float = 0.85,
+          ft_val_frac: float = 0.05,
+          save_finetuned: bool = False):
 
     # ── Device ────────────────────────────────────────────────────────────────
     if device_str == "auto":
@@ -253,6 +390,28 @@ def infer(edges_path: str,
     )
     print(f"Graph: {data.num_nodes} nodes | {data.edge_index.shape[1]} edges")
 
+    # ── Target-city train/val/test split (test stays untouched by fine-tuning) ─
+    train_bool, val_bool, test_bool = load_or_build_split(
+        edges, N, pyg_data_dir, target_city, ft_train_frac, ft_val_frac, device
+    )
+
+    # ── Fine-tune the source-pretrained model on the target train split ───────
+    if finetune:
+        model = finetune_on_target(
+            model, data, train_bool, val_bool, HIGHWAY_UNK_ID, device,
+            epochs=ft_epochs, lr=ft_lr, p_mask=ft_p_mask, patience=ft_patience,
+        )
+        if save_finetuned:
+            save_checkpoint(
+                model=model, num_highway=num_highway, hwy2id=hwy2id, id2hwy=id2hwy,
+                HIGHWAY_MASK_ID=HIGHWAY_MASK_ID, LANES_MASK_ID=LANES_MASK_ID, LANES_MISS_ID=LANES_MISS_ID,
+                ONEWAY_MASK_ID=ONEWAY_MASK_ID, ONEWAY_MISS_ID=ONEWAY_MISS_ID,
+                len_scaler=len_scaler, wid_scaler=wid_scaler, max_scaler=max_scaler,
+                min_scaler=min_scaler, avg_scaler=avg_scaler,
+                SEED=0, P_MASK=ft_p_mask, city=f"{source_city}_finetuned_on_{target_city}",
+                cont_dim=cont_dim, optimizer=None, epoch=ft_epochs, path_sufx="",
+            )
+
     # ── Forward pass (no masking – all inputs passed as-is) ───────────────────
     with torch.no_grad():
         x_cont    = data.x_cont
@@ -268,8 +427,13 @@ def infer(edges_path: str,
     # 70% visible to the GAT as context — the same conditions the model trained
     # under. Masking 100% would be harder than training and give inflated errors;
     # leaving inputs unmasked lets the model trivially invert the Z-score.
+    #
+    # Restricted to the held-out test split: those nodes were never touched
+    # during fine-tuning (backward pass), so this is an honest read of
+    # generalization rather than train-set performance.
     with torch.no_grad():
         eval_masks = make_fixed_masks(data, p_mask=0.30, seed=2025, hwy_unk_id=HIGHWAY_UNK_ID)
+        eval_masks = restrict_masks(eval_masks, test_bool)
 
         x_cont_eval, hwy_eval, lan_eval, onw_eval = corrupt_inputs_with_flags(
             data, eval_masks, HIGHWAY_UNK_ID
@@ -279,7 +443,8 @@ def infer(edges_path: str,
         total_loss, losses = compute_losses(pred_eval, data, eval_masks, model, device)
         metrics            = compute_metrics(pred_eval, data, eval_masks, num_highway, mae_scale)
 
-    print("\n=== Model evaluation (30% masked, matching training conditions) ===")
+    print(f"\n=== Model evaluation on held-out TEST split only (n={int(test_bool.sum())}, "
+          f"30% masked, matching training conditions) ===")
     print(f"  {'attribute':<14}  {'loss':>8}  {'metric':>30}  {'n_eval':>8}")
     print(f"  {'-'*14}  {'-'*8}  {'-'*30}  {'-'*8}")
     n_obs = {k: int(eval_masks[k].sum()) for k in eval_masks}
@@ -315,7 +480,8 @@ def infer(edges_path: str,
         "source_city": source_city,
     }
 
-    eval_output_path = os.path.join('results', f"{source_city}_2_{target_city}_eval_results.json")
+    os.makedirs(results_dir, exist_ok=True)
+    eval_output_path = os.path.join(results_dir, f"{source_city}_2_{target_city}_eval_results.json")
     import json
     with open(eval_output_path, "w") as f:
         json.dump(eval_results, f, indent=2)
@@ -500,12 +666,34 @@ def parse_args():
     p.add_argument("--checkpoint_dir",  default="./checkpoints")
     p.add_argument("--plots_dir",       default="./plots/cross-city/",
                    help="Directory to save the data-scarcity evaluation table/plots")
+    p.add_argument("--results_dir",     default="./results",
+                   help="Directory to save the eval_results.json (use a distinct dir from the "
+                        "non-finetuned run so results don't overwrite each other)")
     p.add_argument("--n_bins",          type=int, default=5,
                    help="Number of data-scarcity bins for the scarcity evaluation")
     # p.add_argument("--output",          default='./data/imputed_data/jakarta.parquet',
                 #    help="Output parquet path. Defaults to <data_dir>/<city>_imputed.parquet")
     p.add_argument("--device",          default="cuda",
                    help="'auto', 'cpu', 'cuda', 'cuda:0', …")
+
+    # ── Fine-tuning on the target city ─────────────────────────────────────
+    p.add_argument("--pyg_data_dir",    default="./data/pyg_data/",
+                   help="Directory with {city}_train_idx.npy/_val_idx.npy/_test_idx.npy from 1.2_split_train_test.py; "
+                        "falls back to an inline spatial split if not found")
+    p.add_argument("--no_finetune",     action="store_true",
+                   help="Skip fine-tuning and evaluate the source checkpoint zero-shot on the target city")
+    p.add_argument("--ft_epochs",       type=int,   default=150)
+    p.add_argument("--ft_lr",           type=float, default=1e-4,
+                   help="Fine-tuning learning rate (lower than the 1e-3 used for training from scratch)")
+    p.add_argument("--ft_p_mask",       type=float, default=0.30)
+    p.add_argument("--ft_patience",     type=int,   default=20,
+                   help="Early-stop fine-tuning after this many epochs with no val-loss improvement")
+    p.add_argument("--ft_train_frac",   type=float, default=0.85,
+                   help="Only used for the inline split fallback")
+    p.add_argument("--ft_val_frac",     type=float, default=0.05,
+                   help="Only used for the inline split fallback")
+    p.add_argument("--save_finetuned",  action="store_true",
+                   help="Save the fine-tuned model as its own checkpoint under --checkpoint_dir")
     return p.parse_args()
 
 
@@ -524,6 +712,16 @@ if __name__ == "__main__":
         target_city      = args.target_city,
         output_path      = output_path,
         plots_dir        = args.plots_dir,
+        results_dir      = args.results_dir,
         n_bins           = args.n_bins,
         device_str       = args.device,
+        pyg_data_dir     = args.pyg_data_dir,
+        finetune         = not args.no_finetune,
+        ft_epochs        = args.ft_epochs,
+        ft_lr            = args.ft_lr,
+        ft_p_mask        = args.ft_p_mask,
+        ft_patience      = args.ft_patience,
+        ft_train_frac    = args.ft_train_frac,
+        ft_val_frac      = args.ft_val_frac,
+        save_finetuned   = args.save_finetuned,
     )

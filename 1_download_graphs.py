@@ -18,6 +18,10 @@ db_handler.connect_to_db()
 for city in city_bounds:
     print(f'Downloading: {city}')
     
+    if city != 'NewYorkCity':
+        print('Not NewYorkCity break')
+        continue
+    
     edges = db_handler.get_edges_enriched_df_streaming(
         min_lat= city_bounds[city]['min_lat'],
         max_lat= city_bounds[city]['max_lat'],
@@ -25,6 +29,8 @@ for city in city_bounds:
         max_lon= city_bounds[city]['max_lon']
     )
     print('Edges Columns: ', edges.columns)
+    print('Edges Size: ', edges.shape)
+    
     print('Converting avg_speed column into Matrix')
     # Convert to matrix: shape (425377, 671)
     speed_matrix = np.array(
@@ -34,7 +40,6 @@ for city in city_bounds:
     
     print('edges: ', edges['max_speed'])
     print('speed_matrix', speed_matrix[:100][:100])
-    sys.exit(0)
     
     print('Saving to disk')
     parquet_filename = SAVE_FOLDER + f"{city}_edges.parquet"
