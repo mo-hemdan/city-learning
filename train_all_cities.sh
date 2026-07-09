@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CITIES_JSON="./cities.json"
+CITIES_JSON="./city_grids.json"
 LOG_DIR="./logs"
 NUM_GPUS=8
 
@@ -21,7 +21,7 @@ gpu_idx=0
 for city in "${cities_array[@]}"; do
     echo "Launching: $city on GPU $gpu_idx"
 
-    python 2_train_on_graphs.py --epochs 5000 --setting transductive --city "$city" --device "cuda:$gpu_idx" \
+    python 2_train_on_graphs.py --epochs 3000 --setting transductive --city "$city" --device "cuda:$gpu_idx" \
         > "$LOG_DIR/${city}.log" 2>&1 &
 
     pids+=($!)

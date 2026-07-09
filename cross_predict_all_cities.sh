@@ -1,12 +1,13 @@
 #!/bin/bash
 
-CITIES_JSON="./cities.json"
+CITIES_JSON="./city_grids.json"
 DATA_DIR="./data/raw_data"
 CHECKPOINT_DIR="./checkpoints"
 OUTPUT_DIR="./data/imputed_data"
 RESULTS_DIR="./results"
 LOG_DIR="./logs/infer"
 DEVICE="cpu"
+EPOCHS=3000
 
 mkdir -p "$OUTPUT_DIR" "$RESULTS_DIR" "$LOG_DIR"
 
@@ -25,6 +26,7 @@ for source_city in $cities; do
             --checkpoint_dir "$CHECKPOINT_DIR" \
             --output_dir "$OUTPUT_DIR" \
             --device "$DEVICE" \
+            --epochs $EPOCHS \
             2>&1 | tee "$LOG_DIR/${source_city}_2_${target_city}.log"
 
         if [ $? -eq 0 ]; then

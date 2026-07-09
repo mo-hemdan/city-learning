@@ -90,7 +90,7 @@ def load_results(results_dir: str):
         city_set.add(target)
 
     cities = sorted(city_set)
-    cities = ['jakarta', 'singapore', 'chicago', 'NewYorkCity', 'sanFrancisco', 'washingtonDC']
+    # cities = ['jakarta', 'singapore', 'chicago', 'NewYorkCity', 'sanFrancisco', 'washingtonDC']
     return data, cities
 
 

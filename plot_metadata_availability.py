@@ -61,6 +61,7 @@ def build_availability_matrix(data_dir: str, cities: list):
 
 
 def plot_availability(mat, cities, labels, out_path):
+    mat = mat.T  # rows = metadata types, columns = cities
     n_rows, n_cols = mat.shape
     fig, ax = plt.subplots(figsize=(max(7, n_cols * 1.3), max(5, n_rows * 0.9)))
 
@@ -75,10 +76,10 @@ def plot_availability(mat, cities, labels, out_path):
 
     ax.set_xticks(range(n_cols))
     ax.set_yticks(range(n_rows))
-    ax.set_xticklabels(labels, rotation=35, ha="right", fontsize=10)
-    ax.set_yticklabels(cities, fontsize=10)
-    ax.set_xlabel("Metadata type", fontsize=11, labelpad=8)
-    ax.set_ylabel("City", fontsize=11, labelpad=8)
+    ax.set_xticklabels(cities, rotation=35, ha="right", fontsize=10)
+    ax.set_yticklabels(labels, fontsize=10)
+    ax.set_xlabel("City", fontsize=11, labelpad=8)
+    ax.set_ylabel("Metadata type", fontsize=11, labelpad=8)
 
     for i in range(n_rows):
         for j in range(n_cols):

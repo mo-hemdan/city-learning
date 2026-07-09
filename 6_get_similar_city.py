@@ -25,17 +25,29 @@ def main(args):
     
     conn = psycopg2.connect(**DB_CONFIG)
     
+    # with conn.cursor() as cur:
+    #     cur.execute("""
+    #         SELECT name
+    #         FROM   cities
+    #         WHERE  name != %s
+    #         ORDER BY embedding <=> (SELECT embedding FROM cities WHERE name = %s)
+    #         LIMIT 1
+    #     """, (city, city))
+        
+    #     row = cur.fetchone()
+    #     similar_city = row[0] if row else None
+    
     with conn.cursor() as cur:
         cur.execute("""
             SELECT name
             FROM   cities
             WHERE  name != %s
             ORDER BY embedding <=> (SELECT embedding FROM cities WHERE name = %s)
-            LIMIT 1
+            LIMIT 3
         """, (city, city))
         
-        row = cur.fetchone()
-        similar_city = row[0] if row else None
+        row = cur.fetchall()
+        similar_city = [r[0] for r in row] if row else None
     
     print('Similar City is ', similar_city)
     sys.exit(0)

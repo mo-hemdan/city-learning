@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 import argparse
 
 sys.path.append(os.path.expanduser("~/websites/mapedia"))
@@ -37,16 +36,7 @@ def parse_args():
     parser.add_argument("--data_dir",    type=str,   default="./data/raw_data/", help="Directory containing parquet and npy files")
     parser.add_argument("--pyg_data_dir",    type=str,   default="./data/pyg_data/", help="Directory containing parquet and npy files")
 
-    parser.add_argument("--plots_dir",   type=str,   default="./plots/single-city/",     help="Directory to save plots")
-
-    parser.add_argument("--epochs",      type=int,   default=500,            help="Number of training epochs")
-    parser.add_argument("--p_mask",      type=float, default=0.30,           help="Masking probability")
-    parser.add_argument("--eval_every",  type=int,   default=1,              help="Evaluate metrics every N epochs")
     parser.add_argument("--seed",        type=int,   default=42,             help="Random seed")
-
-    parser.add_argument("--train_frac",  type=float, default=0.85,           help="Fraction of data for training")
-    parser.add_argument("--val_frac",    type=float, default=0.05,           help="Fraction of data for validation")
-    parser.add_argument("--test_frac",   type=float, default=0.10,           help="Fraction of data for test")
     parser.add_argument("--split_axis",  type=str,   default="lat",          choices=["lat", "lon"], help="Spatial split axis (inductive only)")
     parser.add_argument("--setting",     type=str,   default="inductive",    choices=["inductive", "transductive"],
                         help="inductive: spatial/geographic split (contiguous regions); "
@@ -114,30 +104,7 @@ def main():
     )
     edges['nlanes'] = edges['nlanes'].replace(0.0, 1.0)
     edges.to_crs(epsg=3857, inplace=True)
-
-    # =========================
-    # 4.a) Discard areas with no line-graph connectivity
-    # =========================
-    # Two road segments are only connected in the line graph if they share an
-    # endpoint node. Very small/sparse grid tiles can end up with edges that
-    # never touch each other, giving an empty line graph that later crashes
-    # 2_train_on_graphs.py (ei.max() on an empty tensor). Catch it here so the
-    # area is skipped before any split/mask work is done.
-    edges_with_idx = edges.reset_index().rename(columns={"index": "idx"})
-    edge_index_full = build_line_graph_edge_index(
-        edges_with_idx, u_col="source", v_col="target", eid_col="idx"
-    )
-    if edge_index_full.numel() == 0:
-        print(f"{args.city}: no line-graph edges ({len(edges)} disconnected road segments), discarding")
-        city_grids_path = "./city_grids.json"
-        with open(city_grids_path, "r") as f:
-            city_grids = json.load(f)
-        if args.city in city_grids:
-            del city_grids[args.city]
-            with open(city_grids_path, "w") as f:
-                json.dump(city_grids, f, indent=2)
-        return
-
+    
     # =========================
     # 5) Node split
     # =========================

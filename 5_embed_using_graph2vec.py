@@ -6,15 +6,20 @@ Runs the full graph2vec pipeline for a set of cities and stores
 the resulting embeddings into a PostgreSQL pgvector table.
 
 Usage:
-    python run_graph2vec_pipeline.py --cities cairo london tokyo --dimensions 128
+    python run_graph2vec_pipeline.py --cities_json ./cities.json --dimensions 128
     python run_graph2vec_pipeline.py \
-    --cities cairo london tokyo singapore \
+    --cities_json ./cities.json \
     --dimensions 128 \
     --epochs 50 \
     --workers 4
-    
-    python 5_embed_using_graph2vec.py \
-    --cities jakarta singapore chicago NewYorkCity sanFrancisco washingtonDC 
+
+    python 5_embed_using_graph2vec.py --cities_json ./cities.json
+
+The cities to process are taken from the keys of --cities_json, e.g.:
+    {
+      "jakarta": {...},
+      "singapore": {...}
+    }
 """
 
 import argparse
@@ -31,7 +36,6 @@ from psycopg2.extras import execute_values
 # ── Config ────────────────────────────────────────────────────────────────────
 
 DATA_DIR        = Path("./data/raw_data")
-CITIES_JSON     = Path("./cities.json")
 INPUT_DIR       = Path("./embedding_models/data/graph2vec/input")
 OUTPUT_DIR      = Path("./embedding_models/data/graph2vec/output")
 EMBEDDINGS_CSV  = OUTPUT_DIR / "embeddings_named.csv"
@@ -61,25 +65,17 @@ def run(cmd: list[str], step: str) -> None:
         sys.exit(result.returncode)
 
 
-def filter_cities_json(cities: list[str], src: Path, dst: Path) -> None:
-    """Write a filtered cities.json containing only the requested cities."""
-    with open(src) as f:
-        all_cities = json.load(f)
+def load_cities(cities_json: Path) -> list[str]:
+    """Cities to process are the top-level keys of cities_json."""
+    with open(cities_json) as f:
+        cities = list(json.load(f).keys())
 
-    # Support both list-of-dicts (with "name" key) and dict-of-dicts
-    if isinstance(all_cities, list):
-        filtered = [c for c in all_cities if c["name"] in cities]
-    else:
-        filtered = {k: v for k, v in all_cities.items() if k in cities}
-
-    if not filtered:
-        print(f"[ERROR] None of {cities} found in {src}")
+    if not cities:
+        print(f"[ERROR] No cities found in {cities_json}")
         sys.exit(1)
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    with open(dst, "w") as f:
-        json.dump(filtered, f, indent=2)
-    print(f"[INFO] Filtered cities.json → {dst}  ({len(filtered)} cities)")
+    print(f"[INFO] Loaded {len(cities)} cities from {cities_json}: {cities}")
+    return cities
 
 def upsert_embeddings(conn, df: pd.DataFrame) -> None: 
     dim_cols = [c for c in df.columns if c not in ("city", "graph_id")]
@@ -108,8 +104,8 @@ def upsert_embeddings(conn, df: pd.DataFrame) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="graph2vec pipeline → pgvector")
-    parser.add_argument("--cities",      nargs="+", required=True,
-                        help="City names to process (must match cities.json keys)")
+    parser.add_argument("--cities_json", type=Path, required=True,
+                        help="Path to a JSON file whose top-level keys are the city names to process")
     parser.add_argument("--dimensions",  type=int,  default=128)
     parser.add_argument("--wl-iterations", type=int, default=3)
     parser.add_argument("--epochs",      type=int,  default=50)
@@ -123,9 +119,7 @@ def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     PLOT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Filter cities.json to requested subset
-    filtered_json = OUTPUT_DIR / "cities_filtered.json"
-    filter_cities_json(args.cities, CITIES_JSON, filtered_json)
+    cities = load_cities(args.cities_json)
 
     if not args.skip_embed:
         # ── Step 1: Prepare ───────────────────────────────────────────────────
@@ -134,7 +128,7 @@ def main():
             "--mode",         "prepare",
             "--feature_mode", args.feature_mode,
             "--data_dir",     str(DATA_DIR),
-            "--cities_json",  str(filtered_json),
+            "--cities_json",  str(args.cities_json),
             "--input_dir",    str(INPUT_DIR),
         ], step="1/3 prepare")
 
@@ -153,7 +147,7 @@ def main():
         run([
             sys.executable, "embedding_models/graph2vec_support.py",
             "--mode",        "postprocess",
-            "--cities_json", str(filtered_json),
+            "--cities_json", str(args.cities_json),
             "--input_dir",   str(INPUT_DIR),
             "--output_csv",  str(EMBEDDINGS_CSV),
             "--plot_dir",    str(PLOT_DIR),
@@ -174,7 +168,7 @@ def main():
         sys.exit(1)
 
     # Filter to only requested cities in case CSV has more
-    df = df[df["city"].isin(args.cities)].reset_index(drop=True)
+    df = df[df["city"].isin(cities)].reset_index(drop=True)
     print(f"[INFO] Filtered to {len(df)} requested cities")
 
     conn = psycopg2.connect(**DB_CONFIG)

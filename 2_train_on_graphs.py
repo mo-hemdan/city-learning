@@ -127,6 +127,8 @@ def parse_args():
     parser.add_argument("--tb_logs_sufx", type=str, default="", help="suffex to the tensorboard directory")
     
     parser.add_argument("--n_conv_layers", type=int, default=2)
+    
+    parser.add_argument('--grids', action='store_true', help='Enable grids logging')
 
     return parser.parse_args()
 

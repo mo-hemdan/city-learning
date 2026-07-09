@@ -143,7 +143,8 @@ def infer(edges_path: str,
           output_path: str,
           plots_dir: str = "./plots/cross-city/",
           n_bins: int = 5,
-          device_str: str = "auto"):
+          device_str: str = "auto",
+          epochs: int=5000):
 
     # ── Device ────────────────────────────────────────────────────────────────
     if device_str == "auto":
@@ -154,16 +155,16 @@ def infer(edges_path: str,
 
      # ── Load checkpoint ───────────────────────────────────────────────────────
     # load_checkpoint instantiates + loads the model internally and returns a tuple
-    epoch = 5000
+    # epochs = 5000
     
-    if source_city == 'chicago': epoch = 1400
-    elif source_city == 'jakarta': epoch = 1100
-    elif source_city == 'NewYorkCity': epoch = 1900
-    elif source_city == 'sanFrancisco': epoch = 4400
-    elif source_city == 'singapore': epoch = 3100
-    elif source_city == 'washingtonDC': epoch = 3300
+    # if source_city == 'chicago': epochs = 1400
+    # elif source_city == 'jakarta': epochs = 1100
+    # elif source_city == 'NewYorkCity': epochs = 1900
+    # elif source_city == 'sanFrancisco': epochs = 4400
+    # elif source_city == 'singapore': epochs = 3100
+    # elif source_city == 'washingtonDC': epochs = 3300
     
-    ckpt_path = os.path.join(checkpoint_dir, f"{source_city}/gat_multitask_e{epoch}.pt")
+    ckpt_path = os.path.join(checkpoint_dir, f"{source_city}/gat_multitask_e{epochs}.pt")
     
     (model,
      hwy2id, id2hwy,
@@ -506,6 +507,7 @@ def parse_args():
                 #    help="Output parquet path. Defaults to <data_dir>/<city>_imputed.parquet")
     p.add_argument("--device",          default="cuda",
                    help="'auto', 'cpu', 'cuda', 'cuda:0', …")
+    p.add_argument("--epochs", default=5000)
     return p.parse_args()
 
 
@@ -526,4 +528,5 @@ if __name__ == "__main__":
         plots_dir        = args.plots_dir,
         n_bins           = args.n_bins,
         device_str       = args.device,
+        epochs            = args.epochs,
     )
