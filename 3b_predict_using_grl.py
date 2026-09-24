@@ -64,7 +64,9 @@ def infer(edges_path: str,
           output_path: str,
           plots_dir: str = "./plots/cross-city-grl/",
           n_bins: int = 5,
-          device_str: str = "auto"):
+          device_str: str = "auto",
+          legacy_avg_speed_mps: bool = False,
+          allow_unversioned_checkpoint: bool = False):
 
     # ── Device ────────────────────────────────────────────────────────────────
     if device_str == "auto":
@@ -78,6 +80,11 @@ def infer(edges_path: str,
     (model, hwy2id, id2hwy,
      wid_scaler, max_scaler, min_scaler, avg_scaler,
      meta) = load_checkpoint_grl(HighwayGRL, device=device_str, ckpt_path=ckpt_path)
+    if meta.get("avg_speed_units") != "km/h" and not allow_unversioned_checkpoint:
+        raise RuntimeError(
+            "Checkpoint lacks canonical km/h provenance; retrain with "
+            "2b_train_using_grl.py before generating database predictions"
+        )
 
     num_highway = len(hwy2id)
     print(f"Checkpoint loaded  |  num_highway={num_highway}")
@@ -85,6 +92,9 @@ def infer(edges_path: str,
     # ── Load data ─────────────────────────────────────────────────────────────
     edges = gpd.read_parquet(edges_path)
     speed_matrix = np.load(speed_matrix_path)
+    if legacy_avg_speed_mps:
+        print("Converting legacy prediction inputs from m/s to canonical km/h")
+        speed_matrix = speed_matrix * 3.6
 
     if edges.crs == "EPSG:4326":
         print("CRS: EPSG:4326 ✓")
@@ -335,6 +345,10 @@ def parse_args():
                    help="Directory to save the data-scarcity evaluation table/plots")
     p.add_argument("--n_bins",          type=int, default=5,
                    help="Number of data-scarcity bins for the scarcity evaluation")
+    p.add_argument("--legacy-avg-speed-mps", action="store_true",
+                   help="Convert legacy target-city speed arrays from m/s to km/h")
+    p.add_argument("--allow-unversioned-checkpoint", action="store_true",
+                   help="Allow an old checkpoint without km/h provenance (not recommended for DB output)")
     p.add_argument("--device",          default="cuda",
                    help="'auto', 'cpu', 'cuda', 'cuda:0', …")
     return p.parse_args()
@@ -357,4 +371,6 @@ if __name__ == "__main__":
         plots_dir         = args.plots_dir,
         n_bins            = args.n_bins,
         device_str        = args.device,
+        legacy_avg_speed_mps = args.legacy_avg_speed_mps,
+        allow_unversioned_checkpoint = args.allow_unversioned_checkpoint,
     )

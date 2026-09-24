@@ -8,7 +8,8 @@ SAVE_DIR = "./checkpoints"
 
 def save_checkpoint_grl(model, num_highway, hwy2id, id2hwy,
                          wid_scaler, max_scaler, min_scaler, avg_scaler,
-                         SEED, city, optimizer=None, epoch=None):
+                         SEED, city, optimizer=None, epoch=None,
+                         source_avg_speed_units="km/h"):
     """Checkpoint for HighwayGRL. Kept separate from src.models.saveing so this
     ablation never overwrites the {city}_gat_multitask.pt checkpoint used by
     3_predict_on_graphs.py."""
@@ -42,6 +43,8 @@ def save_checkpoint_grl(model, num_highway, hwy2id, id2hwy,
         "meta": {
             "seed": int(SEED),
             "city": city,
+            "avg_speed_units": "km/h",
+            "source_avg_speed_units": source_avg_speed_units,
         },
 
         "optimizer_state": optimizer.state_dict() if optimizer is not None else None,

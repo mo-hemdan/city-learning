@@ -126,6 +126,8 @@ def parse_args():
     parser.add_argument("--n_bins",       type=int,   default=5,                   help="Number of data-scarcity bins for the final evaluation")
 
     parser.add_argument("--resume",       type=str,   default=None,                help="Path to a checkpoint .pt file to resume training from")
+    parser.add_argument("--legacy-avg-speed-mps", action="store_true",
+                        help="Convert legacy avg-speed training targets from m/s to km/h before fitting")
 
     return parser.parse_args()
 
@@ -162,6 +164,9 @@ def main():
             data[f] for f in data.files
         ]
 
+    if args.legacy_avg_speed_mps:
+        print("Converting legacy avg-speed targets from m/s to canonical km/h")
+        avg_speed_flat_true = avg_speed_flat_true * 3.6
     train_idx = np.load(os.path.join(args.pyg_data_dir, f"{args.city}_train_idx.npy"))
     val_idx = np.load(os.path.join(args.pyg_data_dir, f"{args.city}_val_idx.npy"))
     test_idx = np.load(os.path.join(args.pyg_data_dir, f"{args.city}_test_idx.npy"))
@@ -392,6 +397,7 @@ def main():
                     city=args.city,
                     optimizer=optimizer,
                     epoch=args.epochs,
+                    source_avg_speed_units=("m/s converted to km/h" if args.legacy_avg_speed_mps else "km/h"),
                 )
 
     # =========================
@@ -461,6 +467,7 @@ def main():
         city=args.city,
         optimizer=optimizer,
         epoch=args.epochs,
+        source_avg_speed_units=("m/s converted to km/h" if args.legacy_avg_speed_mps else "km/h"),
     )
 
 

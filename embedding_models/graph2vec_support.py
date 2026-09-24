@@ -236,7 +236,7 @@ def prepare(data_dir, cities_json, input_dir, feature_mode):
 
 # ── Plots ─────────────────────────────────────────────────────────────────────
 
-def plot_similarity_matrix(sim_matrix, cities, out_path, font_scale=1.0):
+def plot_similarity_matrix(sim_matrix, cities, out_path, font_scale=1.0, method_label="Graph2Vec"):
     N   = len(cities)
     fig, ax = plt.subplots(figsize=(max(6, N * 1.1), max(5, N * 1.0)))
 
@@ -282,7 +282,7 @@ def plot_similarity_matrix(sim_matrix, cities, out_path, font_scale=1.0):
             fill=False, edgecolor="steelblue", linewidth=2.0
         ))
 
-    ax.set_title("City Graph Structural Similarity\n(Graph2Vec)",
+    ax.set_title(f"City Graph Structural Similarity\n({method_label})",
                  fontsize=13, fontweight="bold", pad=14)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")

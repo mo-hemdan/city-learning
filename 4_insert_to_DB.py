@@ -6,6 +6,7 @@ from modules import DBHandler, DBUpdater
 import pandas as pd
 import numpy as np
 from modules.db_handler.DBConfig import INTER_CITY_LEARNING_SOURCE, INTRA_CITY_LEARNING_SOURCE, EMPTY_SOURCE
+from backend.eta_speed_policy import valid_avg_speed_mask
 PRESET_CONFIDENCE = 0.9
 PRESET_CONFIDENCE = 0.15
 import psycopg2
@@ -181,7 +182,7 @@ def upload_to_database(conn, ordered_ids, speed_matrix, speed_matrix_source, spe
         print('Commiting')
         conn.commit()
 
-def insert(metadata, db_handler, source, static_only=False):
+def insert(metadata, db_handler, source, static_only=False, avg_speed_units="km/h"):
     print('Taking the static metadata')
     pred_metadata = metadata[['mapd_id', 'osm_id',
         'pred_road_type', 'pred_nlanes',
@@ -220,6 +221,11 @@ def insert(metadata, db_handler, source, static_only=False):
            'pred_avg_speed_weekend_20-24']].copy()
         print('Converting them into matricies')
         speed_matrix  = convert_to_speed_matrix(speed_metadata_df)
+        if avg_speed_units == "m/s":
+            print("Converting legacy learned speeds from m/s to canonical km/h")
+            speed_matrix = speed_matrix * 3.6
+        elif avg_speed_units != "km/h":
+            raise ValueError(f"Unsupported avg_speed_units: {avg_speed_units}")
         speed_matrix_source = np.full(speed_matrix.shape, source, dtype=np.float32)
         speed_matrix_source[np.isnan(speed_matrix)] = np.nan
         speed_matrix_conf   = np.full(speed_matrix.shape, PRESET_CONFIDENCE, dtype=np.float32)
@@ -235,6 +241,16 @@ def insert(metadata, db_handler, source, static_only=False):
 
         print('Converting them into matricies')
         road_attr = road_attributes.loc[ordered_ids]
+        plausible = valid_avg_speed_mask(
+            speed_matrix, np.ones_like(speed_matrix),
+            road_attr["max_speed"].to_numpy(dtype=float),
+        )
+        rejected = np.isfinite(speed_matrix) & ~plausible
+        if rejected.any():
+            print(f"Rejected {int(rejected.sum()):,} implausible learned speed slots")
+            speed_matrix[rejected] = np.nan
+            speed_matrix_source[rejected] = np.nan
+            speed_matrix_conf[rejected] = np.nan
         old_val = np.array(road_attr["avg_speed"].tolist(), dtype=np.float32)
         old_source = np.array(road_attr["avg_speed_source"].tolist(), dtype=np.float32)
         old_conf = np.array(road_attr["avg_speed_conf"].tolist(), dtype=np.float32)
@@ -262,6 +278,8 @@ def parse_args():
     p.add_argument("--source_city",            default="jakarta")
     p.add_argument("--target_city",            default="jakarta")
     p.add_argument("--data_dir",        default="./data/imputed_data")
+    p.add_argument("--avg-speed-units", choices=["km/h", "m/s"], default="km/h",
+                   help="Units in prediction columns; m/s is converted before database writes")
     p.add_argument("--static_only",     action="store_true",
                    help="Insert only the static attributes (skip the 672-slot avg_speed arrays)")
     # p.add_argument("--file", default="jakarta_imputedBy_jakarta.parquet")
@@ -302,4 +320,4 @@ if __name__ == "__main__":
     metadata['pred_road_type'] = metadata['road_type']
     # sys.exit(0)
     
-    insert(metadata, db_handler, source, static_only=args.static_only)
+    insert(metadata, db_handler, source, static_only=args.static_only, avg_speed_units=args.avg_speed_units)
